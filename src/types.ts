@@ -1,0 +1,54 @@
+import { z } from 'zod';
+
+export const ServiceTypeSchema = z.enum([
+  'cli',
+  'cli-persistent',
+  'nginx',
+  'nginx-php-persistent',
+  'php',
+  'mariadb',
+  'postgres',
+  'opensearch',
+  'redis',
+  'solr',
+  'varnish',
+  'node',
+  'python',
+]);
+
+export type ServiceType = z.infer<typeof ServiceTypeSchema>;
+
+export const LagoonServiceSchema = z.object({
+  name: z.string().min(1, 'Service name is required'),
+  type: ServiceTypeSchema,
+  image: z.string().optional(),
+  persistent: z.string().optional(),
+  persistentName: z.string().optional(),
+  buildSteps: z.array(z.string()),
+  customConfig: z.record(z.string(), z.string()),
+  customFiles: z.array(z.object({
+    name: z.string(),
+    content: z.string(),
+  })),
+});
+
+export type LagoonService = z.infer<typeof LagoonServiceSchema>;
+
+export const LagoonProjectSchema = z.object({
+  projectName: z.string().min(1, 'Project name is required'),
+  services: z.array(LagoonServiceSchema).min(1, 'At least one service is required'),
+});
+
+export type LagoonProject = z.infer<typeof LagoonProjectSchema>;
+
+export interface GeneratedFile {
+  name: string;
+  content: string;
+  path: string;
+}
+
+export interface LagoonExample {
+  name: string;
+  description: string;
+  html_url: string;
+}
