@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useForm, useFieldArray } from 'react-hook-form';
+import { useForm, useFieldArray, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { 
   Plus, 
@@ -14,7 +14,10 @@ import {
   Copy,
   Layout,
   Settings,
-  Zap
+  Zap,
+  Clock,
+  Globe,
+  Activity
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import JSZip from 'jszip';
@@ -27,7 +30,10 @@ import {
   LagoonService, 
   ServiceType, 
   GeneratedFile,
-  LagoonExample
+  LagoonExample,
+  LagoonTask,
+  LagoonCronjob,
+  LagoonEnvironment
 } from './types';
 import { SERVICE_DEFAULTS, LAGOON_EXAMPLES_ORG } from './constants';
 import { generateAllFiles } from './generator';
@@ -59,13 +65,34 @@ export default function App() {
         { name: 'nginx', type: 'nginx', image: SERVICE_DEFAULTS.nginx.image, buildSteps: SERVICE_DEFAULTS.nginx.buildSteps, customConfig: {}, customFiles: [] },
         { name: 'php', type: 'php', image: SERVICE_DEFAULTS.php.image, buildSteps: SERVICE_DEFAULTS.php.buildSteps, customConfig: {}, customFiles: [] },
       ],
+      tasks: {
+        preRollout: [
+          { name: 'drush status', command: 'drush status || echo "Drush Status did not complete successfully"', service: 'cli' }
+        ],
+        postRollout: [
+          { name: 'drush updb', command: 'if [[ $(drush status --field=Database) == "Connected" ]]; then drush -y updb; fi', service: 'cli', shell: 'bash' },
+          { name: 'drush cr', command: 'if [[ $(drush status --field=Database) == "Connected" ]]; then drush -y cr; fi', service: 'cli', shell: 'bash' }
+        ]
+      },
+      environments: [
+        { 
+          name: 'main', 
+          cronjobs: [
+            { name: 'drush hourly cron', schedule: 'M * * * *', command: 'drush cron', service: 'cli' }
+          ],
+          routes: []
+        }
+      ]
     },
   });
 
-  const { fields, append, remove } = useFieldArray({
-    control,
-    name: 'services',
-  });
+  const services = useWatch({ control, name: 'services' });
+  const serviceNames = services.map(s => s.name);
+
+  const { fields: serviceFields, append: appendService, remove: removeService } = useFieldArray({ control, name: 'services' });
+  const { fields: preRolloutFields, append: appendPreRollout, remove: removePreRollout } = useFieldArray({ control, name: 'tasks.preRollout' });
+  const { fields: postRolloutFields, append: appendPostRollout, remove: removePostRollout } = useFieldArray({ control, name: 'tasks.postRollout' });
+  const { fields: environmentFields, append: appendEnvironment, remove: removeEnvironment } = useFieldArray({ control, name: 'environments' });
 
   useEffect(() => {
     async function fetchExamples() {
@@ -128,7 +155,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#E4E3E0] text-[#141414] font-sans selection:bg-[#141414] selection:text-[#E4E3E0]">
-      {/* Header */}
       <header className="border-b border-[#141414] p-6 flex justify-between items-center bg-white/50 backdrop-blur-sm sticky top-0 z-50">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 bg-[#141414] rounded-full flex items-center justify-center text-[#E4E3E0]">
@@ -140,66 +166,23 @@ export default function App() {
           </div>
         </div>
         <div className="flex items-center gap-4">
-          <a 
-            href="https://github.com/lagoon-examples" 
-            target="_blank" 
-            rel="noopener noreferrer"
-            className="flex items-center gap-2 text-xs font-mono hover:underline"
-          >
-            <Github size={16} />
-            EXAMPLES
+          <a href="https://github.com/lagoon-examples" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-xs font-mono hover:underline">
+            <Github size={16} /> EXAMPLES
           </a>
         </div>
       </header>
 
       <main className="max-w-7xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-12 gap-8">
-        {/* Configuration Panel */}
         <div className="lg:col-span-5 space-y-8">
           <section className="bg-white border border-[#141414] p-6 rounded-2xl shadow-[4px_4px_0px_0px_rgba(20,20,20,1)]">
             <div className="flex items-center gap-2 mb-6 border-b border-[#141414]/10 pb-4">
               <Settings size={18} className="opacity-50" />
               <h2 className="font-serif italic text-lg">Project Core</h2>
             </div>
-            
             <div className="space-y-4">
               <div>
                 <label className="block text-[10px] font-mono uppercase tracking-wider mb-1 opacity-50">Project Name</label>
-                <input 
-                  {...register('projectName')}
-                  className="w-full bg-[#f5f5f5] border border-[#141414] p-3 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-[#141414]/10"
-                  placeholder="e.g. my-awesome-app"
-                />
-                {errors.projectName && <p className="text-red-500 text-[10px] mt-1 font-mono">{errors.projectName.message}</p>}
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-mono uppercase tracking-wider mb-2 opacity-50">Quick Start Templates</label>
-                <div className="grid grid-cols-1 gap-2">
-                  {isLoadingExamples ? (
-                    <div className="animate-pulse h-10 bg-[#f5f5f5] rounded-lg" />
-                  ) : (
-                    examples.slice(0, 4).map(example => (
-                      <button
-                        key={example.name}
-                        type="button"
-                        onClick={() => {
-                          // Simple template application logic
-                          if (example.name.includes('drupal')) {
-                            setValue('projectName', example.name);
-                            // Could add more complex template logic here
-                          }
-                        }}
-                        className="text-left p-3 rounded-lg border border-[#141414]/10 hover:border-[#141414] hover:bg-[#141414] hover:text-[#E4E3E0] transition-all group"
-                      >
-                        <div className="flex justify-between items-center">
-                          <span className="text-xs font-bold font-mono">{example.name}</span>
-                          <ChevronRight size={14} className="opacity-0 group-hover:opacity-100 transition-opacity" />
-                        </div>
-                        <p className="text-[10px] opacity-60 line-clamp-1 mt-1">{example.description}</p>
-                      </button>
-                    ))
-                  )}
-                </div>
+                <input {...register('projectName')} className="w-full bg-[#f5f5f5] border border-[#141414] p-3 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-[#141414]/10" placeholder="e.g. my-awesome-app" />
               </div>
             </div>
           </section>
@@ -210,157 +193,165 @@ export default function App() {
                 <Layout size={18} className="opacity-50" />
                 <h2 className="font-serif italic text-lg">Services</h2>
               </div>
-              <button 
-                type="button"
-                onClick={() => append({ name: 'new-service', type: 'cli', image: SERVICE_DEFAULTS.cli.image, buildSteps: [], customConfig: {}, customFiles: [] })}
-                className="flex items-center gap-1 text-[10px] font-mono bg-[#141414] text-[#E4E3E0] px-3 py-1.5 rounded-full hover:scale-105 transition-transform"
-              >
+              <button type="button" onClick={() => appendService({ name: 'new-service', type: 'cli', image: SERVICE_DEFAULTS.cli.image, buildSteps: [], customConfig: {}, customFiles: [] })} className="flex items-center gap-1 text-[10px] font-mono bg-[#141414] text-[#E4E3E0] px-3 py-1.5 rounded-full hover:scale-105 transition-transform">
                 <Plus size={12} /> ADD SERVICE
               </button>
             </div>
+            <div className="space-y-4">
+              {serviceFields.map((field, index) => (
+                <div key={field.id} className="p-4 border border-[#141414] rounded-xl bg-[#fcfcfc] relative group">
+                  <button type="button" onClick={() => removeService(index)} className="absolute -top-2 -right-2 w-6 h-6 bg-red-500 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-lg"><Trash2 size={12} /></button>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-[10px] font-mono uppercase opacity-50 mb-1">Name</label>
+                      <input {...register(`services.${index}.name`)} className="w-full bg-white border border-[#141414]/20 p-2 rounded text-xs font-mono focus:border-[#141414] outline-none" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-mono uppercase opacity-50 mb-1">Type</label>
+                      <select {...register(`services.${index}.type`)} onChange={(e) => handleServiceTypeChange(index, e.target.value as ServiceType)} className="w-full bg-white border border-[#141414]/20 p-2 rounded text-xs font-mono focus:border-[#141414] outline-none">
+                        {Object.keys(SERVICE_DEFAULTS).map(type => <option key={type} value={type}>{type}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
 
-            <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
-              <div className="space-y-4">
-                {fields.map((field, index) => (
-                  <motion.div 
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    key={field.id} 
-                    className="p-4 border border-[#141414] rounded-xl bg-[#fcfcfc] relative group"
-                  >
-                    <button 
-                      type="button"
-                      onClick={() => remove(index)}
-                      className="absolute -top-2 -right-2 w-6 h-6 bg-red-500 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-lg"
-                    >
-                      <Trash2 size={12} />
-                    </button>
-
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-[10px] font-mono uppercase opacity-50 mb-1">Name</label>
-                        <input 
-                          {...register(`services.${index}.name`)}
-                          className="w-full bg-white border border-[#141414]/20 p-2 rounded text-xs font-mono focus:border-[#141414] outline-none"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[10px] font-mono uppercase opacity-50 mb-1">Type</label>
-                        <select 
-                          {...register(`services.${index}.type`)}
-                          onChange={(e) => handleServiceTypeChange(index, e.target.value as ServiceType)}
-                          className="w-full bg-white border border-[#141414]/20 p-2 rounded text-xs font-mono focus:border-[#141414] outline-none"
-                        >
-                          {Object.keys(SERVICE_DEFAULTS).map(type => (
-                            <option key={type} value={type}>{type}</option>
-                          ))}
+          <section className="bg-white border border-[#141414] p-6 rounded-2xl shadow-[4px_4px_0px_0px_rgba(20,20,20,1)]">
+            <div className="flex items-center gap-2 mb-6 border-b border-[#141414]/10 pb-4">
+              <Activity size={18} className="opacity-50" />
+              <h2 className="font-serif italic text-lg">Rollout Tasks</h2>
+            </div>
+            
+            <div className="space-y-6">
+              <div>
+                <div className="flex justify-between items-center mb-2">
+                  <label className="text-[10px] font-mono uppercase opacity-50">Pre-Rollout</label>
+                  <button type="button" onClick={() => appendPreRollout({ name: '', command: '', service: 'cli' })} className="text-[10px] font-mono flex items-center gap-1 opacity-50 hover:opacity-100"><Plus size={10} /> ADD</button>
+                </div>
+                <div className="space-y-2">
+                  {preRolloutFields.map((field, index) => (
+                    <div key={field.id} className="p-3 border border-[#141414]/10 rounded-lg space-y-2">
+                      <div className="flex gap-2">
+                        <input {...register(`tasks.preRollout.${index}.name`)} placeholder="Name" className="flex-1 bg-white border border-[#141414]/20 p-2 rounded text-[10px] font-mono" />
+                        <select {...register(`tasks.preRollout.${index}.service`)} className="flex-1 bg-white border border-[#141414]/20 p-2 rounded text-[10px] font-mono">
+                          {serviceNames.map(name => <option key={name} value={name}>{name}</option>)}
                         </select>
+                        <button type="button" onClick={() => removePreRollout(index)} className="p-2 text-red-500"><Trash2 size={12} /></button>
                       </div>
+                      <textarea {...register(`tasks.preRollout.${index}.command`)} placeholder="Command" className="w-full bg-white border border-[#141414]/20 p-2 rounded text-[10px] font-mono resize-none" rows={2} />
                     </div>
-
-                    <div className="mt-3">
-                      <label className="block text-[10px] font-mono uppercase opacity-50 mb-1">Docker Image</label>
-                      <input 
-                        {...register(`services.${index}.image`)}
-                        className="w-full bg-white border border-[#141414]/20 p-2 rounded text-[10px] font-mono focus:border-[#141414] outline-none"
-                      />
-                    </div>
-
-                    <div className="mt-3">
-                      <label className="block text-[10px] font-mono uppercase opacity-50 mb-1">Build Steps (One per line)</label>
-                      <textarea 
-                        rows={2}
-                        placeholder="e.g. composer install"
-                        className="w-full bg-white border border-[#141414]/20 p-2 rounded text-[10px] font-mono focus:border-[#141414] outline-none resize-none"
-                        onChange={(e) => {
-                          const steps = e.target.value.split('\n').filter(s => s.trim());
-                          setValue(`services.${index}.buildSteps`, steps);
-                        }}
-                        defaultValue={field.buildSteps.join('\n')}
-                      />
-                    </div>
-
-                    <div className="mt-3">
-                      <label className="block text-[10px] font-mono uppercase opacity-50 mb-1">Custom Config Files (e.g. redirects-map.conf)</label>
-                      <div className="space-y-2">
-                        {(field.customFiles || []).map((file, fileIndex) => (
-                          <div key={fileIndex} className="flex gap-2 items-start">
-                            <input 
-                              placeholder="Filename"
-                              className="flex-1 bg-white border border-[#141414]/20 p-2 rounded text-[10px] font-mono focus:border-[#141414] outline-none"
-                              defaultValue={file.name}
-                              onChange={(e) => {
-                                const newFiles = [...(field.customFiles || [])];
-                                newFiles[fileIndex].name = e.target.value;
-                                setValue(`services.${index}.customFiles`, newFiles);
-                              }}
-                            />
-                            <textarea 
-                              placeholder="Content"
-                              rows={1}
-                              className="flex-[2] bg-white border border-[#141414]/20 p-2 rounded text-[10px] font-mono focus:border-[#141414] outline-none resize-none"
-                              defaultValue={file.content}
-                              onChange={(e) => {
-                                const newFiles = [...(field.customFiles || [])];
-                                newFiles[fileIndex].content = e.target.value;
-                                setValue(`services.${index}.customFiles`, newFiles);
-                              }}
-                            />
-                            <button 
-                              type="button"
-                              onClick={() => {
-                                const newFiles = (field.customFiles || []).filter((_, i) => i !== fileIndex);
-                                setValue(`services.${index}.customFiles`, newFiles);
-                              }}
-                              className="p-2 text-red-500 hover:bg-red-50 rounded"
-                            >
-                              <Trash2 size={12} />
-                            </button>
-                          </div>
-                        ))}
-                        <button 
-                          type="button"
-                          onClick={() => {
-                            const newFiles = [...(field.customFiles || []), { name: '', content: '' }];
-                            setValue(`services.${index}.customFiles`, newFiles);
-                          }}
-                          className="text-[10px] font-mono text-[#141414] opacity-50 hover:opacity-100 flex items-center gap-1"
-                        >
-                          <Plus size={10} /> ADD CONFIG FILE
-                        </button>
-                      </div>
-                    </div>
-                  </motion.div>
-                ))}
+                  ))}
+                </div>
               </div>
 
-              <button 
-                type="submit"
-                className="w-full bg-[#141414] text-[#E4E3E0] py-4 rounded-xl font-bold tracking-widest uppercase hover:bg-[#333] transition-colors flex items-center justify-center gap-2 shadow-[4px_4px_0px_0px_rgba(0,0,0,0.2)]"
-              >
-                <FileCode size={20} /> GENERATE CONFIGURATION
-              </button>
-            </form>
+              <div>
+                <div className="flex justify-between items-center mb-2">
+                  <label className="text-[10px] font-mono uppercase opacity-50">Post-Rollout</label>
+                  <button type="button" onClick={() => appendPostRollout({ name: '', command: '', service: 'cli' })} className="text-[10px] font-mono flex items-center gap-1 opacity-50 hover:opacity-100"><Plus size={10} /> ADD</button>
+                </div>
+                <div className="space-y-2">
+                  {postRolloutFields.map((field, index) => (
+                    <div key={field.id} className="p-3 border border-[#141414]/10 rounded-lg space-y-2">
+                      <div className="flex gap-2">
+                        <input {...register(`tasks.postRollout.${index}.name`)} placeholder="Name" className="flex-1 bg-white border border-[#141414]/20 p-2 rounded text-[10px] font-mono" />
+                        <select {...register(`tasks.postRollout.${index}.service`)} className="flex-1 bg-white border border-[#141414]/20 p-2 rounded text-[10px] font-mono">
+                          {serviceNames.map(name => <option key={name} value={name}>{name}</option>)}
+                        </select>
+                        <button type="button" onClick={() => removePostRollout(index)} className="p-2 text-red-500"><Trash2 size={12} /></button>
+                      </div>
+                      <textarea {...register(`tasks.postRollout.${index}.command`)} placeholder="Command" className="w-full bg-white border border-[#141414]/20 p-2 rounded text-[10px] font-mono resize-none" rows={2} />
+                      <div className="flex gap-2">
+                        <input {...register(`tasks.postRollout.${index}.shell`)} placeholder="Shell (e.g. bash)" className="flex-1 bg-white border border-[#141414]/20 p-2 rounded text-[10px] font-mono" />
+                        <input {...register(`tasks.postRollout.${index}.when`)} placeholder="When (e.g. branch==main)" className="flex-1 bg-white border border-[#141414]/20 p-2 rounded text-[10px] font-mono" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
           </section>
+
+          <section className="bg-white border border-[#141414] p-6 rounded-2xl shadow-[4px_4px_0px_0px_rgba(20,20,20,1)]">
+            <div className="flex justify-between items-center mb-6 border-b border-[#141414]/10 pb-4">
+              <div className="flex items-center gap-2">
+                <Globe size={18} className="opacity-50" />
+                <h2 className="font-serif italic text-lg">Environments</h2>
+              </div>
+              <button type="button" onClick={() => appendEnvironment({ name: 'new-env', cronjobs: [], routes: [] })} className="flex items-center gap-1 text-[10px] font-mono bg-[#141414] text-[#E4E3E0] px-3 py-1.5 rounded-full hover:scale-105 transition-transform">
+                <Plus size={12} /> ADD ENV
+              </button>
+            </div>
+            <div className="space-y-6">
+              {environmentFields.map((field, envIndex) => (
+                <div key={field.id} className="p-4 border border-[#141414] rounded-xl bg-[#fcfcfc] space-y-4">
+                  <div className="flex justify-between items-center">
+                    <input {...register(`environments.${envIndex}.name`)} className="bg-transparent border-b border-[#141414] font-bold font-serif italic focus:outline-none" />
+                    <button type="button" onClick={() => removeEnvironment(envIndex)} className="text-red-500"><Trash2 size={14} /></button>
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between items-center mb-2">
+                      <label className="text-[10px] font-mono uppercase opacity-50">Cronjobs</label>
+                      <button 
+                        type="button" 
+                        onClick={() => {
+                          const envs = watch('environments');
+                          const newCronjobs = [...(envs[envIndex].cronjobs || []), { name: '', schedule: '', command: '', service: 'cli' }];
+                          setValue(`environments.${envIndex}.cronjobs`, newCronjobs);
+                        }} 
+                        className="text-[10px] font-mono flex items-center gap-1 opacity-50 hover:opacity-100"
+                      >
+                        <Plus size={10} /> ADD CRON
+                      </button>
+                    </div>
+                    <div className="space-y-2">
+                      {(watch(`environments.${envIndex}.cronjobs`) || []).map((cron, cronIndex) => (
+                        <div key={cronIndex} className="p-2 border border-[#141414]/5 rounded space-y-2 bg-white">
+                          <div className="flex gap-2">
+                            <input {...register(`environments.${envIndex}.cronjobs.${cronIndex}.name`)} placeholder="Name" className="flex-1 text-[10px] font-mono border-b" />
+                            <input {...register(`environments.${envIndex}.cronjobs.${cronIndex}.schedule`)} placeholder="Schedule" className="flex-1 text-[10px] font-mono border-b" />
+                            <button 
+                              type="button" 
+                              onClick={() => {
+                                const cronjobs = watch(`environments.${envIndex}.cronjobs`).filter((_, i) => i !== cronIndex);
+                                setValue(`environments.${envIndex}.cronjobs`, cronjobs);
+                              }} 
+                              className="text-red-500"
+                            >
+                              <Trash2 size={10} />
+                            </button>
+                          </div>
+                          <div className="flex gap-2">
+                            <input {...register(`environments.${envIndex}.cronjobs.${cronIndex}.command`)} placeholder="Command" className="flex-[2] text-[10px] font-mono border-b" />
+                            <select {...register(`environments.${envIndex}.cronjobs.${cronIndex}.service`)} className="flex-1 text-[10px] font-mono border-b bg-transparent">
+                              {serviceNames.map(name => <option key={name} value={name}>{name}</option>)}
+                            </select>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <form onSubmit={handleSubmit(onSubmit)}>
+            <button type="submit" className="w-full bg-[#141414] text-[#E4E3E0] py-4 rounded-xl font-bold tracking-widest uppercase hover:bg-[#333] transition-colors flex items-center justify-center gap-2 shadow-[4px_4px_0px_0px_rgba(0,0,0,0.2)]">
+              <FileCode size={20} /> GENERATE CONFIGURATION
+            </button>
+          </form>
         </div>
 
-        {/* Preview Panel */}
         <div className="lg:col-span-7">
           <div className="bg-[#141414] rounded-2xl overflow-hidden shadow-[8px_8px_0px_0px_rgba(20,20,20,0.2)] min-h-[600px] flex flex-col">
             <div className="p-4 border-b border-white/10 flex justify-between items-center bg-white/5">
               <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
                 {generatedFiles.length > 0 ? (
                   generatedFiles.map(file => (
-                    <button
-                      key={file.path}
-                      onClick={() => setActiveTab(file.path)}
-                      className={cn(
-                        "px-4 py-1.5 rounded-full text-[10px] font-mono transition-all whitespace-nowrap",
-                        activeTab === file.path 
-                          ? "bg-[#E4E3E0] text-[#141414]" 
-                          : "text-white/50 hover:text-white hover:bg-white/10"
-                      )}
-                    >
+                    <button key={file.path} onClick={() => setActiveTab(file.path)} className={cn("px-4 py-1.5 rounded-full text-[10px] font-mono transition-all whitespace-nowrap", activeTab === file.path ? "bg-[#E4E3E0] text-[#141414]" : "text-white/50 hover:text-white hover:bg-white/10")}>
                       {file.path}
                     </button>
                   ))
@@ -368,12 +359,8 @@ export default function App() {
                   <div className="text-white/30 text-[10px] font-mono py-1.5 italic">No files generated yet...</div>
                 )}
               </div>
-              
               {generatedFiles.length > 0 && (
-                <button 
-                  onClick={downloadZip}
-                  className="flex items-center gap-2 bg-[#E4E3E0] text-[#141414] px-4 py-1.5 rounded-full text-[10px] font-bold hover:scale-105 transition-transform"
-                >
+                <button onClick={downloadZip} className="flex items-center gap-2 bg-[#E4E3E0] text-[#141414] px-4 py-1.5 rounded-full text-[10px] font-bold hover:scale-105 transition-transform">
                   <Download size={14} /> DOWNLOAD ALL (.ZIP)
                 </button>
               )}
@@ -382,25 +369,13 @@ export default function App() {
             <div className="flex-1 relative overflow-hidden">
               <AnimatePresence mode="wait">
                 {generatedFiles.length > 0 ? (
-                  <motion.div
-                    key={activeTab}
-                    initial={{ opacity: 0, x: 20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    exit={{ opacity: 0, x: -20 }}
-                    className="absolute inset-0 p-6 overflow-auto font-mono text-sm text-emerald-400/90 leading-relaxed custom-scrollbar"
-                  >
+                  <motion.div key={activeTab} initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="absolute inset-0 p-6 overflow-auto font-mono text-sm text-emerald-400/90 leading-relaxed custom-scrollbar">
                     <div className="absolute top-4 right-4 z-10">
-                      <button 
-                        onClick={() => copyToClipboard(generatedFiles.find(f => f.path === activeTab)?.content || '', activeTab)}
-                        className="p-2 bg-white/10 hover:bg-white/20 rounded-lg transition-colors text-white"
-                        title="Copy to clipboard"
-                      >
+                      <button onClick={() => copyToClipboard(generatedFiles.find(f => f.path === activeTab)?.content || '', activeTab)} className="p-2 bg-white/10 hover:bg-white/20 rounded-lg transition-colors text-white" title="Copy to clipboard">
                         {copySuccess === activeTab ? <Check size={16} className="text-emerald-400" /> : <Copy size={16} />}
                       </button>
                     </div>
-                    <pre className="whitespace-pre-wrap">
-                      {generatedFiles.find(f => f.path === activeTab)?.content}
-                    </pre>
+                    <pre className="whitespace-pre-wrap">{generatedFiles.find(f => f.path === activeTab)?.content}</pre>
                   </motion.div>
                 ) : (
                   <div className="absolute inset-0 flex flex-col items-center justify-center text-white/20 p-12 text-center">
@@ -410,18 +385,6 @@ export default function App() {
                   </div>
                 )}
               </AnimatePresence>
-            </div>
-
-            {/* Terminal-like Footer */}
-            <div className="p-3 bg-black/40 border-t border-white/5 font-mono text-[10px] text-white/40 flex justify-between">
-              <div className="flex gap-4">
-                <span>STATUS: {generatedFiles.length > 0 ? 'READY' : 'IDLE'}</span>
-                <span>FILES: {generatedFiles.length}</span>
-              </div>
-              <div className="flex gap-4">
-                <span>UTF-8</span>
-                <span>YAML/DOCKER</span>
-              </div>
             </div>
           </div>
 
@@ -455,20 +418,10 @@ export default function App() {
       <style>{`
         .no-scrollbar::-webkit-scrollbar { display: none; }
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-        
-        .custom-scrollbar::-webkit-scrollbar {
-          width: 8px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-track {
-          background: rgba(255, 255, 255, 0.02);
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb {
-          background: rgba(255, 255, 255, 0.1);
-          border-radius: 4px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-          background: rgba(255, 255, 255, 0.2);
-        }
+        .custom-scrollbar::-webkit-scrollbar { width: 8px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: rgba(255, 255, 255, 0.02); }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.2); }
       `}</style>
     </div>
   );

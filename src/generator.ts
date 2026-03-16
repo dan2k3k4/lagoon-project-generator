@@ -1,29 +1,69 @@
-import { LagoonProject, GeneratedFile } from './types';
+import { LagoonProject, GeneratedFile, LagoonTask } from './types';
 import YAML from 'yaml';
 
+function formatTask(task: LagoonTask) {
+  const result: any = {
+    run: {
+      name: task.name,
+      command: task.command,
+      service: task.service,
+    }
+  };
+  if (task.shell) result.run.shell = task.shell;
+  if (task.when) result.run.when = task.when;
+  return result;
+}
+
 export function generateLagoonYml(project: LagoonProject): string {
-  const config = {
-    dockerComposeYaml: 'docker-compose.yml',
+  const config: any = {
+    'docker-compose-yaml': 'docker-compose.yml',
     project: project.projectName,
-    environments: {
-      master: {
-        routes: project.services
-          .filter(s => s.type.includes('nginx') || s.type === 'node')
-          .map(s => ({
-            [s.name]: [
-              {
-                annotations: {
-                  'nginx.ingress.kubernetes.io/proxy-body-size': '20M',
-                },
-                hosts: [`${project.projectName}.example.com`],
-              },
-            ],
-          })),
-      },
-    },
   };
 
-  return `# .lagoon.yml\n${YAML.stringify(config)}`;
+  if (project.tasks && (project.tasks.preRollout.length > 0 || project.tasks.postRollout.length > 0)) {
+    config.tasks = {};
+    if (project.tasks.preRollout.length > 0) {
+      config.tasks['pre-rollout'] = project.tasks.preRollout.map(formatTask);
+    }
+    if (project.tasks.postRollout.length > 0) {
+      config.tasks['post-rollout'] = project.tasks.postRollout.map(formatTask);
+    }
+  }
+
+  if (project.environments && project.environments.length > 0) {
+    config.environments = {};
+    project.environments.forEach(env => {
+      const envConfig: any = {};
+      
+      if (env.cronjobs && env.cronjobs.length > 0) {
+        envConfig.cronjobs = env.cronjobs.map(cron => ({
+          name: cron.name,
+          schedule: cron.schedule,
+          command: cron.command,
+          service: cron.service,
+        }));
+      }
+
+      if (env.routes && env.routes.length > 0) {
+        envConfig.routes = env.routes.map(route => ({
+          [route.service]: route.hosts.map(host => ({ hosts: [host] }))
+        }));
+      }
+
+      if (Object.keys(envConfig).length > 0) {
+        config.environments[env.name] = envConfig;
+      }
+    });
+  }
+
+  // Use YAML.stringify with options to control spacing if needed, 
+  // but for strict spacing between sections we might still need some manual adjustment
+  let output = YAML.stringify(config, { blockQuote: 'literal' });
+  
+  // Add spacing between top-level sections
+  output = output.replace(/\n([a-z].*):/g, '\n\n$1:');
+  
+  return output.trim();
 }
 
 export function generateDockerCompose(project: LagoonProject): string {
