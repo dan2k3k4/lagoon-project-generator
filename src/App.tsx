@@ -200,11 +200,14 @@ export default function App() {
             <p className="text-[10px] uppercase tracking-widest opacity-50 font-mono">Amazee.io Infrastructure Tool</p>
           </div>
         </div>
-        <div className="flex items-center gap-4">
-          <a href="https://github.com/lagoon-examples" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-xs font-mono hover:underline">
-            <ExternalLink size={16} /> EXAMPLES
+        <nav className="flex items-center gap-6 text-xs font-mono">
+          <a href="https://docs.lagoon.sh/" target="_blank" rel="noopener noreferrer" className="hover:underline">DOCS</a>
+          <a href="https://github.com/lagoon-examples" target="_blank" rel="noopener noreferrer" className="hidden sm:block hover:underline">EXAMPLES</a>
+          <a href="https://github.com/uselagoon/lagoon" target="_blank" rel="noopener noreferrer" className="hidden sm:block hover:underline">SOURCE</a>
+          <a href="https://www.amazee.io/" target="_blank" rel="noopener noreferrer" className="hidden md:flex items-center gap-1 hover:underline">
+            AMAZEE.IO <ExternalLink size={12} />
           </a>
-        </div>
+        </nav>
       </header>
 
       <datalist id="uselagoon-images">
@@ -606,8 +609,7 @@ export default function App() {
         </div>
 
         <div className="lg:col-span-7">
-          <div className="lg:sticky lg:top-28">
-          <div className="bg-[#282c34] rounded-2xl overflow-hidden shadow-[8px_8px_0px_0px_rgba(20,20,20,0.2)] min-h-[600px] h-[calc(100vh-13rem)] flex flex-col">
+          <div className="lg:sticky lg:top-28 bg-[#282c34] rounded-2xl overflow-hidden shadow-[8px_8px_0px_0px_rgba(20,20,20,0.2)] min-h-[600px] h-[calc(100vh-13rem)] flex flex-col">
             <div className="p-4 border-b border-white/10 flex justify-between items-center bg-white/5">
               <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
                 {generatedFiles.length > 0 ? (
@@ -654,30 +656,6 @@ export default function App() {
             </div>
           </div>
 
-          <div className="mt-8 grid grid-cols-3 gap-4">
-            <a href="https://docs.lagoon.sh/" target="_blank" rel="noopener noreferrer" className="bg-white/50 p-4 rounded-xl border border-[#141414]/10 hover:border-[#141414] transition-all group">
-              <h4 className="text-[10px] font-mono uppercase opacity-50 mb-1">Documentation</h4>
-              <div className="flex justify-between items-center">
-                <span className="text-xs font-bold">Lagoon Docs</span>
-                <ExternalLink size={12} className="opacity-0 group-hover:opacity-100 transition-opacity" />
-              </div>
-            </a>
-            <a href="https://github.com/uselagoon/lagoon" target="_blank" rel="noopener noreferrer" className="bg-white/50 p-4 rounded-xl border border-[#141414]/10 hover:border-[#141414] transition-all group">
-              <h4 className="text-[10px] font-mono uppercase opacity-50 mb-1">Open Source</h4>
-              <div className="flex justify-between items-center">
-                <span className="text-xs font-bold">Lagoon Core</span>
-                <ExternalLink size={12} className="opacity-0 group-hover:opacity-100 transition-opacity" />
-              </div>
-            </a>
-            <a href="https://www.amazee.io/" target="_blank" rel="noopener noreferrer" className="bg-white/50 p-4 rounded-xl border border-[#141414]/10 hover:border-[#141414] transition-all group">
-              <h4 className="text-[10px] font-mono uppercase opacity-50 mb-1">Hosting</h4>
-              <div className="flex justify-between items-center">
-                <span className="text-xs font-bold">Amazee.io</span>
-                <ExternalLink size={12} className="opacity-0 group-hover:opacity-100 transition-opacity" />
-              </div>
-            </a>
-          </div>
-          </div>
         </div>
       </main>
 
