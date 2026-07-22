@@ -1,6 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { useForm, useFieldArray, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
+import hljs from 'highlight.js/lib/core';
+import yamlLang from 'highlight.js/lib/languages/yaml';
+import dockerfileLang from 'highlight.js/lib/languages/dockerfile';
 import {
   Plus,
   Trash2,
@@ -38,6 +41,15 @@ function imageStatus(image?: string): 'ok' | 'unknown' | null {
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
+}
+
+hljs.registerLanguage('yaml', yamlLang);
+hljs.registerLanguage('dockerfile', dockerfileLang);
+
+function CodeView({ path, content }: { path: string; content: string }) {
+  const language = path.endsWith('.dockerfile') || path.endsWith('Dockerfile') ? 'dockerfile' : 'yaml';
+  const html = hljs.highlight(content, { language }).value;
+  return <pre className="whitespace-pre-wrap hljs" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
 const inputCls = 'w-full bg-white border border-[#141414]/20 p-2 rounded text-xs font-mono focus:border-[#141414] outline-none';
@@ -199,7 +211,7 @@ export default function App() {
         {LAGOON_IMAGES.images.map(name => <option key={name} value={`uselagoon/${name}:latest`} />)}
       </datalist>
 
-      <main className="max-w-7xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-12 gap-8">
+      <main className="max-w-[96rem] mx-auto p-6 grid grid-cols-1 lg:grid-cols-12 gap-8">
         <div className="lg:col-span-5 space-y-8">
 
           {/* Presets */}
@@ -591,15 +603,11 @@ export default function App() {
             </div>
           </section>
 
-          <p className="text-[10px] font-mono opacity-50 leading-relaxed text-center">
-            Always review the generated files before deploying — this tool can make mistakes, and
-            some option combinations may be incompatible with your project or Lagoon cluster.
-          </p>
         </div>
 
         <div className="lg:col-span-7">
           <div className="lg:sticky lg:top-28">
-          <div className="bg-[#3a3a36] rounded-2xl overflow-hidden shadow-[8px_8px_0px_0px_rgba(20,20,20,0.2)] min-h-[600px] flex flex-col">
+          <div className="bg-[#282c34] rounded-2xl overflow-hidden shadow-[8px_8px_0px_0px_rgba(20,20,20,0.2)] min-h-[600px] h-[calc(100vh-13rem)] flex flex-col">
             <div className="p-4 border-b border-white/10 flex justify-between items-center bg-white/5">
               <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
                 {generatedFiles.length > 0 ? (
@@ -627,13 +635,13 @@ export default function App() {
             <div className="flex-1 relative overflow-hidden">
               <AnimatePresence mode="wait">
                 {generatedFiles.length > 0 ? (
-                  <motion.div key={activeTab} initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="absolute inset-0 p-6 overflow-auto font-mono text-sm text-emerald-400/90 leading-relaxed custom-scrollbar">
+                  <motion.div key={activeTab} initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="absolute inset-0 p-6 overflow-auto font-mono text-sm text-[#abb2bf] leading-relaxed custom-scrollbar">
                     <div className="absolute top-4 right-4 z-10">
                       <button onClick={() => copyToClipboard(generatedFiles.find(f => f.path === activeTab)?.content || '', activeTab)} className="p-2 bg-white/10 hover:bg-white/20 rounded-lg transition-colors text-white" title="Copy to clipboard">
                         {copySuccess === activeTab ? <Check size={16} className="text-emerald-400" /> : <Copy size={16} />}
                       </button>
                     </div>
-                    <pre className="whitespace-pre-wrap">{generatedFiles.find(f => f.path === activeTab)?.content}</pre>
+                    <CodeView path={activeTab} content={generatedFiles.find(f => f.path === activeTab)?.content || ''} />
                   </motion.div>
                 ) : (
                   <div className="absolute inset-0 flex flex-col items-center justify-center text-white/20 p-12 text-center">
@@ -672,6 +680,13 @@ export default function App() {
           </div>
         </div>
       </main>
+
+      <footer className="border-t border-[#141414] px-6 py-3 bg-white/50 backdrop-blur-sm sticky bottom-0 z-50">
+        <p className="text-xs font-mono opacity-70 leading-relaxed text-center max-w-[96rem] mx-auto">
+          Always review the generated files before deploying — this tool can make mistakes, and
+          some option combinations may be incompatible with your project or Lagoon cluster.
+        </p>
+      </footer>
 
       <style>{`
         .no-scrollbar::-webkit-scrollbar { display: none; }

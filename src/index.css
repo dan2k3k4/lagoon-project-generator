@@ -6,3 +6,15 @@
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
   --font-serif: "Space Grotesk", serif;
 }
+
+/* One Dark syntax colors for highlight.js (yaml + dockerfile). */
+.hljs { color: #abb2bf; }
+.hljs-comment, .hljs-quote { color: #5c6370; font-style: italic; }
+.hljs-attr, .hljs-attribute, .hljs-variable, .hljs-template-variable { color: #e06c75; }
+.hljs-keyword, .hljs-selector-tag { color: #c678dd; }
+.hljs-string, .hljs-addition { color: #98c379; }
+.hljs-number, .hljs-literal { color: #d19a66; }
+.hljs-type, .hljs-meta, .hljs-bullet { color: #56b6c2; }
+.hljs-section, .hljs-title, .hljs-name { color: #61afef; }
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: bold; }
