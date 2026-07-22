@@ -1,26 +1,75 @@
-import { LagoonProject, GeneratedFile, LagoonTask } from './types';
+import { LagoonProject, LagoonService, LagoonTask, LagoonRoute, GeneratedFile } from './types';
+import { SERVICE_DEFAULTS } from './constants';
 import YAML from 'yaml';
 
+const lines = (s?: string) => (s ?? '').split('\n').map(l => l.trim()).filter(Boolean);
+
 function formatTask(task: LagoonTask) {
-  const result: any = {
-    run: {
-      name: task.name,
-      command: task.command,
-      service: task.service,
-    }
-  };
-  if (task.shell) result.run.shell = task.shell;
-  if (task.when) result.run.when = task.when;
-  return result;
+  const run: any = { name: task.name, command: task.command, service: task.service };
+  if (task.container) run.container = task.container;
+  if (task.shell) run.shell = task.shell;
+  if (task.when) run.when = task.when;
+  return { run };
+}
+
+function formatRoute(route: LagoonRoute): string | Record<string, any> {
+  const opts: any = {};
+  if (!route.tlsAcme) opts['tls-acme'] = false;
+  if (route.insecure !== 'Redirect') opts.insecure = route.insecure;
+  if (route.hstsEnabled) {
+    opts.hstsEnabled = true;
+    opts.hstsMaxAge = route.hstsMaxAge;
+  }
+  if (route.monitoringPath) opts['monitoring-path'] = route.monitoringPath;
+  const annotations = lines(route.annotations);
+  if (annotations.length > 0) {
+    opts.annotations = {};
+    annotations.forEach(line => {
+      const idx = line.indexOf(':');
+      if (idx > 0) opts.annotations[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+    });
+  }
+  return Object.keys(opts).length > 0 ? { [route.domain]: opts } : route.domain;
 }
 
 export function generateLagoonYml(project: LagoonProject): string {
   const config: any = {
     'docker-compose-yaml': 'docker-compose.yml',
-    project: project.projectName,
   };
 
-  if (project.tasks && (project.tasks.preRollout.length > 0 || project.tasks.postRollout.length > 0)) {
+  if (project.gitSha) {
+    config.environment_variables = { git_sha: 'true' };
+  }
+
+  const autogenerate: any = {};
+  if (!project.autogenerateEnabled) {
+    autogenerate.enabled = false;
+    if (project.autogenerateAllowPullrequests) autogenerate.allowPullrequests = true;
+  }
+  if (project.autogenerateInsecure !== 'Redirect') autogenerate.insecure = project.autogenerateInsecure;
+  const prefixes = (project.autogeneratePrefixes ?? '').split(',').map(p => p.trim()).filter(Boolean);
+  if (prefixes.length > 0) autogenerate.prefixes = prefixes;
+  if (Object.keys(autogenerate).length > 0) {
+    config.routes = { autogenerate };
+  }
+
+  if (project.backupsEnabled) {
+    config['backup-schedule'] = { production: project.backupSchedule };
+    config['backup-retention'] = { production: { ...project.backupRetention } };
+  }
+
+  if (project.containerRegistries.length > 0) {
+    config['container-registries'] = {};
+    project.containerRegistries.forEach(reg => {
+      const entry: any = {};
+      if (reg.url) entry.url = reg.url;
+      if (reg.username) entry.username = reg.username;
+      // password comes from the REGISTRY_<NAME>_PASSWORD Lagoon variable — never hardcoded
+      config['container-registries'][reg.name] = entry;
+    });
+  }
+
+  if (project.tasks.preRollout.length > 0 || project.tasks.postRollout.length > 0) {
     config.tasks = {};
     if (project.tasks.preRollout.length > 0) {
       config.tasks['pre-rollout'] = project.tasks.preRollout.map(formatTask);
@@ -30,12 +79,26 @@ export function generateLagoonYml(project: LagoonProject): string {
     }
   }
 
-  if (project.environments && project.environments.length > 0) {
-    config.environments = {};
+  if (project.environments.length > 0) {
+    const environments: any = {};
     project.environments.forEach(env => {
       const envConfig: any = {};
-      
-      if (env.cronjobs && env.cronjobs.length > 0) {
+
+      if (env.autogenerateRoutes) {
+        envConfig.autogenerateRoutes = env.autogenerateRoutes === 'true';
+      }
+
+      if (env.routes.length > 0) {
+        // routes is a list of single-key maps: service → list of domains/domain-maps
+        const byService = new Map<string, Array<string | Record<string, any>>>();
+        env.routes.forEach(route => {
+          if (!byService.has(route.service)) byService.set(route.service, []);
+          byService.get(route.service)!.push(formatRoute(route));
+        });
+        envConfig.routes = [...byService.entries()].map(([svc, domains]) => ({ [svc]: domains }));
+      }
+
+      if (env.cronjobs.length > 0) {
         envConfig.cronjobs = env.cronjobs.map(cron => ({
           name: cron.name,
           schedule: cron.schedule,
@@ -44,141 +107,138 @@ export function generateLagoonYml(project: LagoonProject): string {
         }));
       }
 
-      if (env.routes && env.routes.length > 0) {
-        envConfig.routes = env.routes.map(route => ({
-          [route.service]: route.hosts.map(host => ({ hosts: [host] }))
-        }));
-      }
-
-      if (Object.keys(envConfig).length > 0) {
-        config.environments[env.name] = envConfig;
-      }
+      if (Object.keys(envConfig).length > 0) environments[env.name] = envConfig;
     });
+    if (Object.keys(environments).length > 0) config.environments = environments;
   }
 
-  // Use YAML.stringify with options to control spacing if needed, 
-  // but for strict spacing between sections we might still need some manual adjustment
-  let output = YAML.stringify(config, { blockQuote: 'literal' });
-  
-  // Add spacing between top-level sections
-  output = output.replace(/\n([a-z].*):/g, '\n\n$1:');
-  
-  return output.trim();
+  let output = YAML.stringify(config, { blockQuote: 'literal', lineWidth: 0 });
+  // blank line between top-level sections
+  output = output.replace(/\n([a-z][a-z-_]*):/g, '\n\n$1:');
+  return output.trim() + '\n';
 }
+
+const needsBuild = (service: LagoonService) => SERVICE_DEFAULTS[service.type].build;
+const needsCliImage = (service: LagoonService, hasCli: boolean) =>
+  hasCli && SERVICE_DEFAULTS[service.type].cliBuildArg;
 
 export function generateDockerCompose(project: LagoonProject): string {
-  const services: any = {};
-  const volumes: any = {};
+  const info = (s: LagoonService) => SERVICE_DEFAULTS[s.type];
+  const hasCli = project.services.some(s => s.type === 'cli' || s.type === 'cli-persistent');
+  const cliService = project.services.find(s => s.type === 'cli' || s.type === 'cli-persistent');
 
-  // Add default volumes if needed
-  const hasPersistent = project.services.some(s => s.persistent);
-  if (hasPersistent) {
-    volumes['files'] = {};
-  }
+  let out = `x-environment:
+  &default-environment
+    LAGOON_PROJECT: ${project.projectName}
+    # Route that should be used locally
+    LAGOON_ROUTE: &default-url http://\${COMPOSE_PROJECT_NAME:-${project.projectName}}.docker.amazee.io
+    # Uncomment if you like to have the system behave like in production
+    #LAGOON_ENVIRONMENT_TYPE: production
+    # Uncomment to enable xdebug and then restart via \`docker compose up -d\`
+    #XDEBUG_ENABLE: "true"
 
-  project.services.forEach(service => {
-    const serviceConfig: any = {
-      labels: {
-        'lagoon.type': service.type,
-      },
-    };
+x-volumes:
+  &default-volumes
+    volumes:
+      - .:/app:delegated
 
-    if (service.persistent) {
-      serviceConfig.labels['lagoon.persistent'] = service.persistent;
-      if (service.persistentName) {
-        serviceConfig.labels['lagoon.persistent.name'] = service.persistentName;
+services:
+`;
+
+  // the &cli-image anchor must be defined before any *cli-image alias
+  const ordered = [...project.services].sort(
+    (a, b) => Number(!a.type.startsWith('cli')) - Number(!b.type.startsWith('cli'))
+  );
+
+  ordered.forEach(service => {
+    const i = info(service);
+    out += `
+  ${service.name}:\n`;
+
+    if (needsBuild(service)) {
+      out += `    build:
+      context: .
+      dockerfile: lagoon/${service.name}.dockerfile\n`;
+      if (needsCliImage(service, hasCli)) {
+        out += `      args:
+        CLI_IMAGE: *cli-image\n`;
       }
+      if (service.type === 'cli' || service.type === 'cli-persistent') {
+        out += `    image: &cli-image \${COMPOSE_PROJECT_NAME:-${project.projectName}}-cli\n`;
+      }
+    } else if (service.image) {
+      out += `    image: ${service.image}\n`;
     }
 
-    // Determine if it needs a build or just an image
-    const needsBuild = ['cli', 'cli-persistent', 'nginx', 'php', 'node', 'python'].includes(service.type);
+    out += `    labels:
+      lagoon.type: ${service.type}\n`;
+    if (service.lagoonName) out += `      lagoon.name: ${service.lagoonName}\n`;
+    if (service.persistent) out += `      lagoon.persistent: ${service.persistent}\n`;
+    if (service.persistentName) out += `      lagoon.persistent.name: ${service.persistentName}\n`;
+    if (service.persistentSize) out += `      lagoon.persistent.size: ${service.persistentSize}\n`;
+    if (service.autogeneratedRoute) out += `      lagoon.autogeneratedroute: '${service.autogeneratedRoute}'\n`;
+    if (service.port) out += `      lagoon.service.port: ${service.port}\n`;
 
-    if (needsBuild) {
-      serviceConfig.build = {
-        context: '.',
-        dockerfile: `.lagoon/${service.name}.Dockerfile`,
-      };
-      if (service.type === 'nginx' || service.type === 'php') {
-        serviceConfig.build.args = {
-          CLI_IMAGE: `\${COMPOSE_PROJECT_NAME:-${project.projectName}}-cli`,
-        };
-      }
-      serviceConfig.image = `\${COMPOSE_PROJECT_NAME:-${project.projectName}}-${service.name}`;
-    } else {
-      serviceConfig.image = service.image || 'uselagoon/placeholder:latest';
+    if (i.appVolume) out += `    << : *default-volumes\n`;
+    if (needsCliImage(service, hasCli) && cliService) {
+      out += `    depends_on:
+      - ${cliService.name}\n`;
     }
-
-    // Common environment
-    serviceConfig.environment = {
-      LAGOON_PROJECT: project.projectName,
-      LAGOON_ROUTE: `http://\${COMPOSE_PROJECT_NAME:-${project.projectName}}.docker.amazee.io`,
-    };
-
-    services[service.name] = serviceConfig;
+    out += `    environment:
+      << : *default-environment\n`;
+    if (i.routes) {
+      out += `    networks:
+      - amazeeio-network
+      - default\n`;
+    }
   });
 
-  const config = {
-    version: '3.7',
-    services,
-    volumes,
-    networks: {
-      amazeeio_network: {
-        external: true,
-      },
-      default: {
-        driver: 'bridge',
-      },
-    },
-  };
-
-  return `# docker-compose.yml\n${YAML.stringify(config)}`;
+  out += `
+networks:
+  amazeeio-network:
+    external: true
+`;
+  return out;
 }
 
-export function generateDockerfile(service: any): string {
-  const baseImage = service.image || 'uselagoon/php-8.3-cli-drupal:latest';
-  
-  let content = `FROM ${baseImage}\n\n`;
-  
-  if (service.buildSteps && service.buildSteps.length > 0) {
-    content += `RUN ${service.buildSteps.join(' && ')}\n\n`;
-  }
+export function generateDockerfile(service: LagoonService, hasCli: boolean): string {
+  const image = service.image || SERVICE_DEFAULTS[service.type].image;
+  const steps = lines(service.buildSteps);
+  let content: string;
 
-  content += `COPY . /app\n`;
-  
+  if (needsCliImage(service, hasCli)) {
+    content = `ARG CLI_IMAGE
+FROM \${CLI_IMAGE} AS cli
+
+FROM ${image}
+
+COPY --from=cli /app /app
+`;
+  } else {
+    content = `FROM ${image}
+
+COPY . /app
+`;
+  }
+  if (steps.length > 0) {
+    content += `\nRUN ${steps.join(' \\\n    && ')}\n`;
+  }
   return content;
 }
 
 export function generateAllFiles(project: LagoonProject): GeneratedFile[] {
+  const hasCli = project.services.some(s => s.type === 'cli' || s.type === 'cli-persistent');
   const files: GeneratedFile[] = [
-    {
-      name: '.lagoon.yml',
-      path: '.lagoon.yml',
-      content: generateLagoonYml(project),
-    },
-    {
-      name: 'docker-compose.yml',
-      path: 'docker-compose.yml',
-      content: generateDockerCompose(project),
-    },
+    { name: '.lagoon.yml', path: '.lagoon.yml', content: generateLagoonYml(project) },
+    { name: 'docker-compose.yml', path: 'docker-compose.yml', content: generateDockerCompose(project) },
   ];
 
   project.services.forEach(service => {
-    const needsDockerfile = ['cli', 'cli-persistent', 'nginx', 'php', 'node', 'python'].includes(service.type);
-    if (needsDockerfile) {
+    if (needsBuild(service)) {
       files.push({
-        name: `${service.name}.Dockerfile`,
-        path: `.lagoon/${service.name}.Dockerfile`,
-        content: generateDockerfile(service),
-      });
-    }
-
-    if (service.customFiles && service.customFiles.length > 0) {
-      service.customFiles.forEach(file => {
-        files.push({
-          name: file.name,
-          path: `.lagoon/${service.name}/${file.name}`,
-          content: file.content,
-        });
+        name: `${service.name}.dockerfile`,
+        path: `lagoon/${service.name}.dockerfile`,
+        content: generateDockerfile(service, hasCli),
       });
     }
   });

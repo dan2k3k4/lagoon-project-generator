@@ -1,53 +1,66 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useForm, useFieldArray, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { 
-  Plus, 
-  Trash2, 
-  Download, 
-  FileCode, 
-  ChevronRight, 
-  ChevronDown, 
-  Github, 
+import {
+  Plus,
+  Trash2,
+  Download,
+  FileCode,
   ExternalLink,
   Check,
   Copy,
   Layout,
   Settings,
   Zap,
-  Clock,
   Globe,
-  Activity
+  Activity,
+  Route,
+  Archive,
+  KeyRound,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import JSZip from 'jszip';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
-import { 
-  LagoonProject, 
-  LagoonProjectSchema, 
-  LagoonService, 
-  ServiceType, 
-  GeneratedFile,
-  LagoonExample,
-  LagoonTask,
-  LagoonCronjob,
-  LagoonEnvironment
-} from './types';
-import { SERVICE_DEFAULTS, LAGOON_EXAMPLES_ORG } from './constants';
+import { LagoonProject, LagoonProjectInput, LagoonProjectSchema, ServiceType, GeneratedFile, SERVICE_TYPES } from './types';
+import { SERVICE_DEFAULTS, PRESETS } from './constants';
 import { generateAllFiles } from './generator';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+const inputCls = 'w-full bg-white border border-[#141414]/20 p-2 rounded text-xs font-mono focus:border-[#141414] outline-none';
+const labelCls = 'block text-[10px] font-mono uppercase tracking-wider opacity-50 mb-1';
+const addBtnCls = 'text-[10px] font-mono flex items-center gap-1 opacity-50 hover:opacity-100';
+const cardCls = 'bg-white border border-[#141414] p-6 rounded-2xl shadow-[4px_4px_0px_0px_rgba(20,20,20,1)]';
+
+function SectionHeader({ icon, title, action }: { icon: React.ReactNode; title: string; action?: React.ReactNode }) {
+  return (
+    <div className="flex justify-between items-center mb-6 border-b border-[#141414]/10 pb-4">
+      <div className="flex items-center gap-2">
+        <span className="opacity-50">{icon}</span>
+        <h2 className="font-serif italic text-lg">{title}</h2>
+      </div>
+      {action}
+    </div>
+  );
+}
+
+function AddButton({ onClick, label }: { onClick: () => void; label: string }) {
+  return (
+    <button type="button" onClick={onClick} className="flex items-center gap-1 text-[10px] font-mono bg-[#141414] text-[#E4E3E0] px-3 py-1.5 rounded-full hover:scale-105 transition-transform">
+      <Plus size={12} /> {label}
+    </button>
+  );
+}
+
 export default function App() {
   const [generatedFiles, setGeneratedFiles] = useState<GeneratedFile[]>([]);
   const [activeTab, setActiveTab] = useState<string>('');
-  const [examples, setExamples] = useState<LagoonExample[]>([]);
-  const [isLoadingExamples, setIsLoadingExamples] = useState(false);
   const [copySuccess, setCopySuccess] = useState<string | null>(null);
+  const [preset, setPreset] = useState<string>('Drupal');
 
   const {
     register,
@@ -55,66 +68,29 @@ export default function App() {
     handleSubmit,
     watch,
     setValue,
+    reset,
     formState: { errors },
-  } = useForm<LagoonProject>({
+  } = useForm<LagoonProjectInput, any, LagoonProject>({
     resolver: zodResolver(LagoonProjectSchema),
-    defaultValues: {
-      projectName: 'my-lagoon-project',
-      services: [
-        { name: 'cli', type: 'cli', image: SERVICE_DEFAULTS.cli.image, buildSteps: SERVICE_DEFAULTS.cli.buildSteps, customConfig: {}, customFiles: [] },
-        { name: 'nginx', type: 'nginx', image: SERVICE_DEFAULTS.nginx.image, buildSteps: SERVICE_DEFAULTS.nginx.buildSteps, customConfig: {}, customFiles: [] },
-        { name: 'php', type: 'php', image: SERVICE_DEFAULTS.php.image, buildSteps: SERVICE_DEFAULTS.php.buildSteps, customConfig: {}, customFiles: [] },
-      ],
-      tasks: {
-        preRollout: [
-          { name: 'drush status', command: 'drush status || echo "Drush Status did not complete successfully"', service: 'cli' }
-        ],
-        postRollout: [
-          { name: 'drush updb', command: 'if [[ $(drush status --field=Database) == "Connected" ]]; then drush -y updb; fi', service: 'cli', shell: 'bash' },
-          { name: 'drush cr', command: 'if [[ $(drush status --field=Database) == "Connected" ]]; then drush -y cr; fi', service: 'cli', shell: 'bash' }
-        ]
-      },
-      environments: [
-        { 
-          name: 'main', 
-          cronjobs: [
-            { name: 'drush hourly cron', schedule: 'M * * * *', command: 'drush cron', service: 'cli' }
-          ],
-          routes: []
-        }
-      ]
-    },
+    defaultValues: PRESETS.Drupal,
   });
 
-  const services = useWatch({ control, name: 'services' });
+  const services = useWatch({ control, name: 'services' }) ?? [];
   const serviceNames = services.map(s => s.name);
+  const backupsEnabled = useWatch({ control, name: 'backupsEnabled' });
+  const autogenerateEnabled = useWatch({ control, name: 'autogenerateEnabled' });
 
   const { fields: serviceFields, append: appendService, remove: removeService } = useFieldArray({ control, name: 'services' });
   const { fields: preRolloutFields, append: appendPreRollout, remove: removePreRollout } = useFieldArray({ control, name: 'tasks.preRollout' });
   const { fields: postRolloutFields, append: appendPostRollout, remove: removePostRollout } = useFieldArray({ control, name: 'tasks.postRollout' });
   const { fields: environmentFields, append: appendEnvironment, remove: removeEnvironment } = useFieldArray({ control, name: 'environments' });
+  const { fields: registryFields, append: appendRegistry, remove: removeRegistry } = useFieldArray({ control, name: 'containerRegistries' });
 
-  useEffect(() => {
-    async function fetchExamples() {
-      setIsLoadingExamples(true);
-      try {
-        const response = await fetch(`https://api.github.com/orgs/${LAGOON_EXAMPLES_ORG}/repos?sort=stars&direction=desc`);
-        if (response.ok) {
-          const data = await response.json();
-          setExamples(data.map((repo: any) => ({
-            name: repo.name,
-            description: repo.description,
-            html_url: repo.html_url
-          })));
-        }
-      } catch (error) {
-        console.error('Failed to fetch examples:', error);
-      } finally {
-        setIsLoadingExamples(false);
-      }
-    }
-    fetchExamples();
-  }, []);
+  const loadPreset = (name: string) => {
+    setPreset(name);
+    reset(PRESETS[name]);
+    setGeneratedFiles([]);
+  };
 
   const onSubmit = (data: LagoonProject) => {
     const files = generateAllFiles(data);
@@ -124,9 +100,7 @@ export default function App() {
 
   const downloadZip = async () => {
     const zip = new JSZip();
-    generatedFiles.forEach(file => {
-      zip.file(file.path, file.content);
-    });
+    generatedFiles.forEach(file => zip.file(file.path, file.content));
     const blob = await zip.generateAsync({ type: 'blob' });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -144,14 +118,31 @@ export default function App() {
 
   const handleServiceTypeChange = (index: number, type: ServiceType) => {
     const defaults = SERVICE_DEFAULTS[type];
-    if (defaults) {
-      setValue(`services.${index}.image`, defaults.image);
-      setValue(`services.${index}.buildSteps`, defaults.buildSteps);
-      if (defaults.persistent) {
-        setValue(`services.${index}.persistent`, defaults.persistent);
-      }
-    }
+    setValue(`services.${index}.type`, type);
+    setValue(`services.${index}.image`, defaults.image);
+    setValue(`services.${index}.persistent`, defaults.persistent ?? '');
+    setValue(`services.${index}.persistentName`, defaults.persistentName ?? '');
+    setValue(`services.${index}.buildSteps`, defaults.buildSteps);
   };
+
+  const taskFields = (kind: 'preRollout' | 'postRollout', fields: typeof preRolloutFields, remove: (i: number) => void) =>
+    fields.map((field, index) => (
+      <div key={field.id} className="p-3 border border-[#141414]/10 rounded-lg space-y-2">
+        <div className="flex gap-2">
+          <input {...register(`tasks.${kind}.${index}.name`)} placeholder="Name" className={cn(inputCls, 'flex-1 text-[10px]')} />
+          <select {...register(`tasks.${kind}.${index}.service`)} className={cn(inputCls, 'flex-1 text-[10px]')}>
+            {serviceNames.map(name => <option key={name} value={name}>{name}</option>)}
+          </select>
+          <button type="button" onClick={() => remove(index)} className="p-2 text-red-500"><Trash2 size={12} /></button>
+        </div>
+        <textarea {...register(`tasks.${kind}.${index}.command`)} placeholder="Command" className={cn(inputCls, 'text-[10px] resize-none')} rows={2} />
+        <div className="flex gap-2">
+          <input {...register(`tasks.${kind}.${index}.shell`)} placeholder="Shell (e.g. bash)" className={cn(inputCls, 'flex-1 text-[10px]')} />
+          <input {...register(`tasks.${kind}.${index}.when`)} placeholder='When (e.g. LAGOON_ENVIRONMENT_TYPE == "production")' className={cn(inputCls, 'flex-[2] text-[10px]')} />
+          <input {...register(`tasks.${kind}.${index}.container`)} placeholder="Container" className={cn(inputCls, 'flex-1 text-[10px]')} />
+        </div>
+      </div>
+    ));
 
   return (
     <div className="min-h-screen bg-[#E4E3E0] text-[#141414] font-sans selection:bg-[#141414] selection:text-[#E4E3E0]">
@@ -167,165 +158,346 @@ export default function App() {
         </div>
         <div className="flex items-center gap-4">
           <a href="https://github.com/lagoon-examples" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-xs font-mono hover:underline">
-            <Github size={16} /> EXAMPLES
+            <ExternalLink size={16} /> EXAMPLES
           </a>
         </div>
       </header>
 
       <main className="max-w-7xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-12 gap-8">
         <div className="lg:col-span-5 space-y-8">
-          <section className="bg-white border border-[#141414] p-6 rounded-2xl shadow-[4px_4px_0px_0px_rgba(20,20,20,1)]">
-            <div className="flex items-center gap-2 mb-6 border-b border-[#141414]/10 pb-4">
-              <Settings size={18} className="opacity-50" />
-              <h2 className="font-serif italic text-lg">Project Core</h2>
-            </div>
+
+          {/* Presets */}
+          <div className="flex gap-2">
+            {Object.keys(PRESETS).map(name => (
+              <button
+                key={name}
+                type="button"
+                onClick={() => loadPreset(name)}
+                className={cn(
+                  'flex-1 py-2 rounded-full text-[10px] font-mono uppercase tracking-wider border border-[#141414] transition-colors',
+                  preset === name ? 'bg-[#141414] text-[#E4E3E0]' : 'bg-white hover:bg-[#141414]/5'
+                )}
+              >
+                {name}
+              </button>
+            ))}
+          </div>
+
+          {/* Project Core */}
+          <section className={cardCls}>
+            <SectionHeader icon={<Settings size={18} />} title="Project Core" />
             <div className="space-y-4">
               <div>
-                <label className="block text-[10px] font-mono uppercase tracking-wider mb-1 opacity-50">Project Name</label>
-                <input {...register('projectName')} className="w-full bg-[#f5f5f5] border border-[#141414] p-3 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-[#141414]/10" placeholder="e.g. my-awesome-app" />
+                <label className={labelCls}>Project Name</label>
+                <input {...register('projectName')} className={cn(inputCls, 'p-3 text-sm bg-[#f5f5f5]')} placeholder="e.g. my-awesome-app" />
+                {errors.projectName && <p className="text-red-500 text-[10px] font-mono mt-1">{errors.projectName.message}</p>}
+              </div>
+              <label className="flex items-center gap-2 text-xs font-mono cursor-pointer">
+                <input type="checkbox" {...register('gitSha')} className="accent-[#141414]" />
+                Inject Git SHA (<span className="opacity-50">environment_variables.git_sha</span>)
+              </label>
+            </div>
+          </section>
+
+          {/* Autogenerated Routes */}
+          <section className={cardCls}>
+            <SectionHeader icon={<Route size={18} />} title="Autogenerated Routes" />
+            <div className="space-y-4">
+              <label className="flex items-center gap-2 text-xs font-mono cursor-pointer">
+                <input type="checkbox" {...register('autogenerateEnabled')} className="accent-[#141414]" />
+                Enable autogenerated routes
+              </label>
+              {!autogenerateEnabled && (
+                <label className="flex items-center gap-2 text-xs font-mono cursor-pointer">
+                  <input type="checkbox" {...register('autogenerateAllowPullrequests')} className="accent-[#141414]" />
+                  Still allow for pull request environments
+                </label>
+              )}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className={labelCls}>Insecure Traffic</label>
+                  <select {...register('autogenerateInsecure')} className={inputCls}>
+                    <option value="Redirect">Redirect</option>
+                    <option value="Allow">Allow</option>
+                  </select>
+                </div>
+                <div>
+                  <label className={labelCls}>Prefixes (comma separated)</label>
+                  <input {...register('autogeneratePrefixes')} placeholder="www, de, fr" className={inputCls} />
+                </div>
               </div>
             </div>
           </section>
 
-          <section className="bg-white border border-[#141414] p-6 rounded-2xl shadow-[4px_4px_0px_0px_rgba(20,20,20,1)]">
-            <div className="flex justify-between items-center mb-6 border-b border-[#141414]/10 pb-4">
-              <div className="flex items-center gap-2">
-                <Layout size={18} className="opacity-50" />
-                <h2 className="font-serif italic text-lg">Services</h2>
-              </div>
-              <button type="button" onClick={() => appendService({ name: 'new-service', type: 'cli', image: SERVICE_DEFAULTS.cli.image, buildSteps: [], customConfig: {}, customFiles: [] })} className="flex items-center gap-1 text-[10px] font-mono bg-[#141414] text-[#E4E3E0] px-3 py-1.5 rounded-full hover:scale-105 transition-transform">
-                <Plus size={12} /> ADD SERVICE
-              </button>
+          {/* Backups */}
+          <section className={cardCls}>
+            <SectionHeader icon={<Archive size={18} />} title="Backups (Production)" />
+            <div className="space-y-4">
+              <label className="flex items-center gap-2 text-xs font-mono cursor-pointer">
+                <input type="checkbox" {...register('backupsEnabled')} className="accent-[#141414]" />
+                Customize backup schedule &amp; retention
+              </label>
+              {backupsEnabled && (
+                <>
+                  <div>
+                    <label className={labelCls}>Schedule (cron, M = random minute)</label>
+                    <input {...register('backupSchedule')} className={inputCls} />
+                  </div>
+                  <div className="grid grid-cols-4 gap-2">
+                    {(['hourly', 'daily', 'weekly', 'monthly'] as const).map(period => (
+                      <div key={period}>
+                        <label className={labelCls}>{period}</label>
+                        <input type="number" min={0} {...register(`backupRetention.${period}`)} className={inputCls} />
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
+          </section>
+
+          {/* Container Registries */}
+          <section className={cardCls}>
+            <SectionHeader
+              icon={<KeyRound size={18} />}
+              title="Container Registries"
+              action={<AddButton label="ADD REGISTRY" onClick={() => appendRegistry({ name: 'my-registry', url: '', username: '' })} />}
+            />
+            <div className="space-y-2">
+              {registryFields.length === 0 && <p className="text-[10px] font-mono opacity-40">None — public images only.</p>}
+              {registryFields.map((field, index) => (
+                <div key={field.id} className="flex gap-2 items-start">
+                  <input {...register(`containerRegistries.${index}.name`)} placeholder="Name" className={cn(inputCls, 'flex-1 text-[10px]')} />
+                  <input {...register(`containerRegistries.${index}.url`)} placeholder="URL (empty = Docker Hub)" className={cn(inputCls, 'flex-[2] text-[10px]')} />
+                  <input {...register(`containerRegistries.${index}.username`)} placeholder="Username" className={cn(inputCls, 'flex-1 text-[10px]')} />
+                  <button type="button" onClick={() => removeRegistry(index)} className="p-2 text-red-500"><Trash2 size={12} /></button>
+                </div>
+              ))}
+              {registryFields.length > 0 && (
+                <p className="text-[10px] font-mono opacity-40">
+                  Set passwords as Lagoon variables: REGISTRY_&lt;NAME&gt;_PASSWORD (scope: container_registry).
+                </p>
+              )}
+            </div>
+          </section>
+
+          {/* Services */}
+          <section className={cardCls}>
+            <SectionHeader
+              icon={<Layout size={18} />}
+              title="Services"
+              action={<AddButton label="ADD SERVICE" onClick={() => appendService({ name: 'new-service', type: 'basic', image: SERVICE_DEFAULTS.basic.image, persistent: '', persistentName: '', persistentSize: '', lagoonName: '', autogeneratedRoute: '', port: '', buildSteps: '' })} />}
+            />
             <div className="space-y-4">
               {serviceFields.map((field, index) => (
-                <div key={field.id} className="p-4 border border-[#141414] rounded-xl bg-[#fcfcfc] relative group">
+                <div key={field.id} className="p-4 border border-[#141414] rounded-xl bg-[#fcfcfc] relative group space-y-3">
                   <button type="button" onClick={() => removeService(index)} className="absolute -top-2 -right-2 w-6 h-6 bg-red-500 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-lg"><Trash2 size={12} /></button>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-[10px] font-mono uppercase opacity-50 mb-1">Name</label>
-                      <input {...register(`services.${index}.name`)} className="w-full bg-white border border-[#141414]/20 p-2 rounded text-xs font-mono focus:border-[#141414] outline-none" />
+                      <label className={labelCls}>Name</label>
+                      <input {...register(`services.${index}.name`)} className={inputCls} />
                     </div>
                     <div>
-                      <label className="block text-[10px] font-mono uppercase opacity-50 mb-1">Type</label>
-                      <select {...register(`services.${index}.type`)} onChange={(e) => handleServiceTypeChange(index, e.target.value as ServiceType)} className="w-full bg-white border border-[#141414]/20 p-2 rounded text-xs font-mono focus:border-[#141414] outline-none">
-                        {Object.keys(SERVICE_DEFAULTS).map(type => <option key={type} value={type}>{type}</option>)}
+                      <label className={labelCls}>Lagoon Type</label>
+                      <select
+                        value={services[index]?.type}
+                        onChange={(e) => handleServiceTypeChange(index, e.target.value as ServiceType)}
+                        className={inputCls}
+                      >
+                        {SERVICE_TYPES.map(type => <option key={type} value={type}>{type}</option>)}
                       </select>
                     </div>
                   </div>
+                  <div>
+                    <label className={labelCls}>Image</label>
+                    <input {...register(`services.${index}.image`)} className={inputCls} />
+                  </div>
+                  <details>
+                    <summary className="text-[10px] font-mono uppercase opacity-50 cursor-pointer select-none">Advanced</summary>
+                    <div className="mt-3 space-y-3">
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className={labelCls}>Persistent Path</label>
+                          <input {...register(`services.${index}.persistent`)} placeholder="/app/files/" className={inputCls} />
+                        </div>
+                        <div>
+                          <label className={labelCls}>Persistent Name (share volume of)</label>
+                          <input {...register(`services.${index}.persistentName`)} placeholder="nginx" className={inputCls} />
+                        </div>
+                        <div>
+                          <label className={labelCls}>Persistent Size</label>
+                          <input {...register(`services.${index}.persistentSize`)} placeholder="5Gi" className={inputCls} />
+                        </div>
+                        <div>
+                          <label className={labelCls}>Pod Group (lagoon.name)</label>
+                          <input {...register(`services.${index}.lagoonName`)} placeholder="nginx" className={inputCls} />
+                        </div>
+                        <div>
+                          <label className={labelCls}>Autogenerated Route</label>
+                          <select {...register(`services.${index}.autogeneratedRoute`)} className={inputCls}>
+                            <option value="">Default</option>
+                            <option value="true">true</option>
+                            <option value="false">false</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className={labelCls}>Port (lagoon.service.port)</label>
+                          <input {...register(`services.${index}.port`)} placeholder="3000" className={inputCls} />
+                        </div>
+                      </div>
+                      {SERVICE_DEFAULTS[services[index]?.type ?? 'basic'].build && (
+                        <div>
+                          <label className={labelCls}>Dockerfile Build Steps (one per line)</label>
+                          <textarea {...register(`services.${index}.buildSteps`)} rows={2} className={cn(inputCls, 'resize-none')} />
+                        </div>
+                      )}
+                    </div>
+                  </details>
                 </div>
               ))}
             </div>
           </section>
 
-          <section className="bg-white border border-[#141414] p-6 rounded-2xl shadow-[4px_4px_0px_0px_rgba(20,20,20,1)]">
-            <div className="flex items-center gap-2 mb-6 border-b border-[#141414]/10 pb-4">
-              <Activity size={18} className="opacity-50" />
-              <h2 className="font-serif italic text-lg">Rollout Tasks</h2>
-            </div>
-            
+          {/* Rollout Tasks */}
+          <section className={cardCls}>
+            <SectionHeader icon={<Activity size={18} />} title="Rollout Tasks" />
             <div className="space-y-6">
               <div>
                 <div className="flex justify-between items-center mb-2">
                   <label className="text-[10px] font-mono uppercase opacity-50">Pre-Rollout</label>
-                  <button type="button" onClick={() => appendPreRollout({ name: '', command: '', service: 'cli' })} className="text-[10px] font-mono flex items-center gap-1 opacity-50 hover:opacity-100"><Plus size={10} /> ADD</button>
+                  <button type="button" onClick={() => appendPreRollout({ name: '', command: '', service: serviceNames[0] ?? 'cli', container: '', shell: '', when: '' })} className={addBtnCls}><Plus size={10} /> ADD</button>
                 </div>
-                <div className="space-y-2">
-                  {preRolloutFields.map((field, index) => (
-                    <div key={field.id} className="p-3 border border-[#141414]/10 rounded-lg space-y-2">
-                      <div className="flex gap-2">
-                        <input {...register(`tasks.preRollout.${index}.name`)} placeholder="Name" className="flex-1 bg-white border border-[#141414]/20 p-2 rounded text-[10px] font-mono" />
-                        <select {...register(`tasks.preRollout.${index}.service`)} className="flex-1 bg-white border border-[#141414]/20 p-2 rounded text-[10px] font-mono">
-                          {serviceNames.map(name => <option key={name} value={name}>{name}</option>)}
-                        </select>
-                        <button type="button" onClick={() => removePreRollout(index)} className="p-2 text-red-500"><Trash2 size={12} /></button>
-                      </div>
-                      <textarea {...register(`tasks.preRollout.${index}.command`)} placeholder="Command" className="w-full bg-white border border-[#141414]/20 p-2 rounded text-[10px] font-mono resize-none" rows={2} />
-                    </div>
-                  ))}
-                </div>
+                <div className="space-y-2">{taskFields('preRollout', preRolloutFields, removePreRollout)}</div>
               </div>
-
               <div>
                 <div className="flex justify-between items-center mb-2">
                   <label className="text-[10px] font-mono uppercase opacity-50">Post-Rollout</label>
-                  <button type="button" onClick={() => appendPostRollout({ name: '', command: '', service: 'cli' })} className="text-[10px] font-mono flex items-center gap-1 opacity-50 hover:opacity-100"><Plus size={10} /> ADD</button>
+                  <button type="button" onClick={() => appendPostRollout({ name: '', command: '', service: serviceNames[0] ?? 'cli', container: '', shell: '', when: '' })} className={addBtnCls}><Plus size={10} /> ADD</button>
                 </div>
-                <div className="space-y-2">
-                  {postRolloutFields.map((field, index) => (
-                    <div key={field.id} className="p-3 border border-[#141414]/10 rounded-lg space-y-2">
-                      <div className="flex gap-2">
-                        <input {...register(`tasks.postRollout.${index}.name`)} placeholder="Name" className="flex-1 bg-white border border-[#141414]/20 p-2 rounded text-[10px] font-mono" />
-                        <select {...register(`tasks.postRollout.${index}.service`)} className="flex-1 bg-white border border-[#141414]/20 p-2 rounded text-[10px] font-mono">
-                          {serviceNames.map(name => <option key={name} value={name}>{name}</option>)}
-                        </select>
-                        <button type="button" onClick={() => removePostRollout(index)} className="p-2 text-red-500"><Trash2 size={12} /></button>
-                      </div>
-                      <textarea {...register(`tasks.postRollout.${index}.command`)} placeholder="Command" className="w-full bg-white border border-[#141414]/20 p-2 rounded text-[10px] font-mono resize-none" rows={2} />
-                      <div className="flex gap-2">
-                        <input {...register(`tasks.postRollout.${index}.shell`)} placeholder="Shell (e.g. bash)" className="flex-1 bg-white border border-[#141414]/20 p-2 rounded text-[10px] font-mono" />
-                        <input {...register(`tasks.postRollout.${index}.when`)} placeholder="When (e.g. branch==main)" className="flex-1 bg-white border border-[#141414]/20 p-2 rounded text-[10px] font-mono" />
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                <div className="space-y-2">{taskFields('postRollout', postRolloutFields, removePostRollout)}</div>
               </div>
             </div>
           </section>
 
-          <section className="bg-white border border-[#141414] p-6 rounded-2xl shadow-[4px_4px_0px_0px_rgba(20,20,20,1)]">
-            <div className="flex justify-between items-center mb-6 border-b border-[#141414]/10 pb-4">
-              <div className="flex items-center gap-2">
-                <Globe size={18} className="opacity-50" />
-                <h2 className="font-serif italic text-lg">Environments</h2>
-              </div>
-              <button type="button" onClick={() => appendEnvironment({ name: 'new-env', cronjobs: [], routes: [] })} className="flex items-center gap-1 text-[10px] font-mono bg-[#141414] text-[#E4E3E0] px-3 py-1.5 rounded-full hover:scale-105 transition-transform">
-                <Plus size={12} /> ADD ENV
-              </button>
-            </div>
+          {/* Environments */}
+          <section className={cardCls}>
+            <SectionHeader
+              icon={<Globe size={18} />}
+              title="Environments"
+              action={<AddButton label="ADD ENV" onClick={() => appendEnvironment({ name: 'new-env', autogenerateRoutes: '', cronjobs: [], routes: [] })} />}
+            />
             <div className="space-y-6">
               {environmentFields.map((field, envIndex) => (
                 <div key={field.id} className="p-4 border border-[#141414] rounded-xl bg-[#fcfcfc] space-y-4">
-                  <div className="flex justify-between items-center">
-                    <input {...register(`environments.${envIndex}.name`)} className="bg-transparent border-b border-[#141414] font-bold font-serif italic focus:outline-none" />
+                  <div className="flex justify-between items-center gap-4">
+                    <input {...register(`environments.${envIndex}.name`)} className="bg-transparent border-b border-[#141414] font-bold font-serif italic focus:outline-none flex-1" />
+                    <select {...register(`environments.${envIndex}.autogenerateRoutes`)} className={cn(inputCls, 'w-auto text-[10px]')} title="autogenerateRoutes override">
+                      <option value="">auto-routes: inherit</option>
+                      <option value="true">auto-routes: true</option>
+                      <option value="false">auto-routes: false</option>
+                    </select>
                     <button type="button" onClick={() => removeEnvironment(envIndex)} className="text-red-500"><Trash2 size={14} /></button>
                   </div>
 
+                  {/* Routes */}
+                  <div>
+                    <div className="flex justify-between items-center mb-2">
+                      <label className="text-[10px] font-mono uppercase opacity-50">Custom Routes</label>
+                      <button
+                        type="button"
+                        onClick={() => setValue(`environments.${envIndex}.routes`, [
+                          ...(watch(`environments.${envIndex}.routes`) || []),
+                          { service: serviceNames[0] ?? 'nginx', domain: '', tlsAcme: true, insecure: 'Redirect', hstsEnabled: false, hstsMaxAge: 31536000, monitoringPath: '', annotations: '' },
+                        ])}
+                        className={addBtnCls}
+                      >
+                        <Plus size={10} /> ADD ROUTE
+                      </button>
+                    </div>
+                    <div className="space-y-2">
+                      {(watch(`environments.${envIndex}.routes`) || []).map((_route, routeIndex) => (
+                        <div key={routeIndex} className="p-2 border border-[#141414]/5 rounded space-y-2 bg-white">
+                          <div className="flex gap-2">
+                            <select {...register(`environments.${envIndex}.routes.${routeIndex}.service`)} className={cn(inputCls, 'flex-1 text-[10px]')}>
+                              {serviceNames.map(name => <option key={name} value={name}>{name}</option>)}
+                            </select>
+                            <input {...register(`environments.${envIndex}.routes.${routeIndex}.domain`)} placeholder="www.example.com" className={cn(inputCls, 'flex-[2] text-[10px]')} />
+                            <button
+                              type="button"
+                              onClick={() => setValue(`environments.${envIndex}.routes`, (watch(`environments.${envIndex}.routes`) || []).filter((_, i) => i !== routeIndex))}
+                              className="text-red-500"
+                            >
+                              <Trash2 size={10} />
+                            </button>
+                          </div>
+                          <details>
+                            <summary className="text-[10px] font-mono uppercase opacity-40 cursor-pointer select-none">Route options</summary>
+                            <div className="mt-2 space-y-2">
+                              <div className="flex gap-4 items-center">
+                                <label className="flex items-center gap-1 text-[10px] font-mono cursor-pointer">
+                                  <input type="checkbox" {...register(`environments.${envIndex}.routes.${routeIndex}.tlsAcme`)} className="accent-[#141414]" /> TLS (Let's Encrypt)
+                                </label>
+                                <label className="flex items-center gap-1 text-[10px] font-mono cursor-pointer">
+                                  <input type="checkbox" {...register(`environments.${envIndex}.routes.${routeIndex}.hstsEnabled`)} className="accent-[#141414]" /> HSTS
+                                </label>
+                                <select {...register(`environments.${envIndex}.routes.${routeIndex}.insecure`)} className={cn(inputCls, 'w-auto text-[10px]')}>
+                                  <option value="Redirect">HTTP: Redirect</option>
+                                  <option value="Allow">HTTP: Allow</option>
+                                </select>
+                              </div>
+                              <div className="grid grid-cols-2 gap-2">
+                                <div>
+                                  <label className={labelCls}>HSTS Max Age</label>
+                                  <input type="number" {...register(`environments.${envIndex}.routes.${routeIndex}.hstsMaxAge`)} className={cn(inputCls, 'text-[10px]')} />
+                                </div>
+                                <div>
+                                  <label className={labelCls}>Monitoring Path</label>
+                                  <input {...register(`environments.${envIndex}.routes.${routeIndex}.monitoringPath`)} placeholder="/health" className={cn(inputCls, 'text-[10px]')} />
+                                </div>
+                              </div>
+                              <div>
+                                <label className={labelCls}>Ingress Annotations (key: value, one per line)</label>
+                                <textarea {...register(`environments.${envIndex}.routes.${routeIndex}.annotations`)} rows={2} placeholder={'nginx.ingress.kubernetes.io/permanent-redirect: https://www.example.com$request_uri'} className={cn(inputCls, 'text-[10px] resize-none')} />
+                              </div>
+                            </div>
+                          </details>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Cronjobs */}
                   <div>
                     <div className="flex justify-between items-center mb-2">
                       <label className="text-[10px] font-mono uppercase opacity-50">Cronjobs</label>
-                      <button 
-                        type="button" 
-                        onClick={() => {
-                          const envs = watch('environments');
-                          const newCronjobs = [...(envs[envIndex].cronjobs || []), { name: '', schedule: '', command: '', service: 'cli' }];
-                          setValue(`environments.${envIndex}.cronjobs`, newCronjobs);
-                        }} 
-                        className="text-[10px] font-mono flex items-center gap-1 opacity-50 hover:opacity-100"
+                      <button
+                        type="button"
+                        onClick={() => setValue(`environments.${envIndex}.cronjobs`, [
+                          ...(watch(`environments.${envIndex}.cronjobs`) || []),
+                          { name: '', schedule: 'M * * * *', command: '', service: serviceNames[0] ?? 'cli' },
+                        ])}
+                        className={addBtnCls}
                       >
                         <Plus size={10} /> ADD CRON
                       </button>
                     </div>
                     <div className="space-y-2">
-                      {(watch(`environments.${envIndex}.cronjobs`) || []).map((cron, cronIndex) => (
+                      {(watch(`environments.${envIndex}.cronjobs`) || []).map((_cron, cronIndex) => (
                         <div key={cronIndex} className="p-2 border border-[#141414]/5 rounded space-y-2 bg-white">
                           <div className="flex gap-2">
-                            <input {...register(`environments.${envIndex}.cronjobs.${cronIndex}.name`)} placeholder="Name" className="flex-1 text-[10px] font-mono border-b" />
-                            <input {...register(`environments.${envIndex}.cronjobs.${cronIndex}.schedule`)} placeholder="Schedule" className="flex-1 text-[10px] font-mono border-b" />
-                            <button 
-                              type="button" 
-                              onClick={() => {
-                                const cronjobs = watch(`environments.${envIndex}.cronjobs`).filter((_, i) => i !== cronIndex);
-                                setValue(`environments.${envIndex}.cronjobs`, cronjobs);
-                              }} 
+                            <input {...register(`environments.${envIndex}.cronjobs.${cronIndex}.name`)} placeholder="Name" className={cn(inputCls, 'flex-1 text-[10px]')} />
+                            <input {...register(`environments.${envIndex}.cronjobs.${cronIndex}.schedule`)} placeholder="M * * * * (M = random minute)" className={cn(inputCls, 'flex-1 text-[10px]')} />
+                            <button
+                              type="button"
+                              onClick={() => setValue(`environments.${envIndex}.cronjobs`, (watch(`environments.${envIndex}.cronjobs`) || []).filter((_, i) => i !== cronIndex))}
                               className="text-red-500"
                             >
                               <Trash2 size={10} />
                             </button>
                           </div>
                           <div className="flex gap-2">
-                            <input {...register(`environments.${envIndex}.cronjobs.${cronIndex}.command`)} placeholder="Command" className="flex-[2] text-[10px] font-mono border-b" />
-                            <select {...register(`environments.${envIndex}.cronjobs.${cronIndex}.service`)} className="flex-1 text-[10px] font-mono border-b bg-transparent">
+                            <input {...register(`environments.${envIndex}.cronjobs.${cronIndex}.command`)} placeholder="Command" className={cn(inputCls, 'flex-[2] text-[10px]')} />
+                            <select {...register(`environments.${envIndex}.cronjobs.${cronIndex}.service`)} className={cn(inputCls, 'flex-1 text-[10px]')}>
                               {serviceNames.map(name => <option key={name} value={name}>{name}</option>)}
                             </select>
                           </div>
@@ -346,12 +518,12 @@ export default function App() {
         </div>
 
         <div className="lg:col-span-7">
-          <div className="bg-[#141414] rounded-2xl overflow-hidden shadow-[8px_8px_0px_0px_rgba(20,20,20,0.2)] min-h-[600px] flex flex-col">
+          <div className="bg-[#141414] rounded-2xl overflow-hidden shadow-[8px_8px_0px_0px_rgba(20,20,20,0.2)] min-h-[600px] flex flex-col sticky top-28">
             <div className="p-4 border-b border-white/10 flex justify-between items-center bg-white/5">
               <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
                 {generatedFiles.length > 0 ? (
                   generatedFiles.map(file => (
-                    <button key={file.path} onClick={() => setActiveTab(file.path)} className={cn("px-4 py-1.5 rounded-full text-[10px] font-mono transition-all whitespace-nowrap", activeTab === file.path ? "bg-[#E4E3E0] text-[#141414]" : "text-white/50 hover:text-white hover:bg-white/10")}>
+                    <button key={file.path} onClick={() => setActiveTab(file.path)} className={cn('px-4 py-1.5 rounded-full text-[10px] font-mono transition-all whitespace-nowrap', activeTab === file.path ? 'bg-[#E4E3E0] text-[#141414]' : 'text-white/50 hover:text-white hover:bg-white/10')}>
                       {file.path}
                     </button>
                   ))
@@ -360,7 +532,7 @@ export default function App() {
                 )}
               </div>
               {generatedFiles.length > 0 && (
-                <button onClick={downloadZip} className="flex items-center gap-2 bg-[#E4E3E0] text-[#141414] px-4 py-1.5 rounded-full text-[10px] font-bold hover:scale-105 transition-transform">
+                <button onClick={downloadZip} className="flex items-center gap-2 bg-[#E4E3E0] text-[#141414] px-4 py-1.5 rounded-full text-[10px] font-bold hover:scale-105 transition-transform whitespace-nowrap">
                   <Download size={14} /> DOWNLOAD ALL (.ZIP)
                 </button>
               )}
@@ -381,14 +553,13 @@ export default function App() {
                   <div className="absolute inset-0 flex flex-col items-center justify-center text-white/20 p-12 text-center">
                     <FileCode size={64} className="mb-4 opacity-10" />
                     <h3 className="font-serif italic text-xl mb-2">Ready to Build</h3>
-                    <p className="text-sm max-w-xs">Configure your services on the left and click generate to see your Lagoon configuration files.</p>
+                    <p className="text-sm max-w-xs">Pick a preset, configure services, routes, tasks, cronjobs &amp; backups on the left, then generate your Lagoon configuration files.</p>
                   </div>
                 )}
               </AnimatePresence>
             </div>
           </div>
 
-          {/* Docs Quick Links */}
           <div className="mt-8 grid grid-cols-3 gap-4">
             <a href="https://docs.lagoon.sh/" target="_blank" rel="noopener noreferrer" className="bg-white/50 p-4 rounded-xl border border-[#141414]/10 hover:border-[#141414] transition-all group">
               <h4 className="text-[10px] font-mono uppercase opacity-50 mb-1">Documentation</h4>
