@@ -14,7 +14,7 @@ const drupal = LagoonProjectSchema.parse({
     {
       ...PRESETS.Drupal.environments[0],
       routes: [
-        { service: 'nginx', domain: 'example.com', tlsAcme: true, insecure: 'Redirect', hstsEnabled: false, hstsMaxAge: 31536000 },
+        { service: 'nginx', domain: 'example.com', tlsAcme: true, insecure: 'Redirect', hstsEnabled: false, hstsMaxAge: 31536000, monitoringPath: '', annotations: '' },
         {
           service: 'nginx', domain: 'www.example.com', tlsAcme: false, insecure: 'Allow',
           hstsEnabled: true, hstsMaxAge: 31536000, monitoringPath: '/health',
@@ -37,6 +37,7 @@ assert.equal(lagoon['backup-retention'].production.daily, 7);
 assert.equal(lagoon['container-registries']['my-registry'].username, 'bob');
 assert.equal(lagoon.tasks['pre-rollout'][0].run.service, 'cli');
 assert.equal(lagoon.tasks['post-rollout'][0].run.shell, 'bash');
+assert.match(lagoon.tasks['post-rollout'][0].run.command, /drush -y deploy/);
 assert.equal(lagoon.environments.main.cronjobs[0].command, 'drush cron');
 
 // routes: list of single-key maps → service → [plain domain | {domain: opts}]
@@ -60,10 +61,28 @@ assert.equal(compose.services.mariadb.labels['lagoon.type'], 'mariadb');
 assert.equal(compose.networks['amazeeio-network'].external, true);
 
 // dockerfiles: cli builds from base image, nginx multi-stages from CLI_IMAGE
-assert.match(byPath['lagoon/cli.dockerfile'], /FROM uselagoon\/php-8\.3-cli-drupal:latest/);
+assert.match(byPath['lagoon/cli.dockerfile'], /FROM uselagoon\/php-8\.4-cli-drupal:latest/);
 assert.match(byPath['lagoon/cli.dockerfile'], /RUN composer install --no-dev/);
 assert.match(byPath['lagoon/nginx.dockerfile'], /ARG CLI_IMAGE/);
 assert.match(byPath['lagoon/nginx.dockerfile'], /COPY --from=cli \/app \/app/);
+
+// round-trip: importing generated files reproduces the form values
+import { parseImport } from './importer';
+const lagoonImport = parseImport(byPath['.lagoon.yml']);
+assert.equal(lagoonImport.kind, '.lagoon.yml');
+assert.equal(lagoonImport.warnings.length, 0, lagoonImport.warnings.join('; '));
+assert.deepEqual(lagoonImport.project.tasks, drupal.tasks);
+assert.deepEqual(lagoonImport.project.environments, drupal.environments);
+assert.equal(lagoonImport.project.gitSha, true);
+assert.equal(lagoonImport.project.backupsEnabled, true);
+assert.deepEqual(lagoonImport.project.backupRetention, drupal.backupRetention);
+assert.deepEqual(lagoonImport.project.containerRegistries, drupal.containerRegistries);
+
+const composeImport = parseImport(byPath['docker-compose.yml']);
+assert.equal(composeImport.kind, 'docker-compose.yml');
+assert.equal(composeImport.warnings.length, 0, composeImport.warnings.join('; '));
+assert.equal(composeImport.project.projectName, undefined); // no x-lagoon-project key emitted
+assert.deepEqual(composeImport.project.services, drupal.services);
 
 // a minimal project emits no empty sections
 const minimal = LagoonProjectSchema.parse(PRESETS.Static);

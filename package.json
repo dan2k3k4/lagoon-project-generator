@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
-    "test": "tsx src/generator.test.ts"
+    "test": "tsx src/generator.test.ts",
+    "update-images": "tsx scripts/update-images.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.4.0",

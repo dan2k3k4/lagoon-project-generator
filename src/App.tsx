@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useForm, useFieldArray, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import {
@@ -26,6 +26,15 @@ import { twMerge } from 'tailwind-merge';
 import { LagoonProject, LagoonProjectInput, LagoonProjectSchema, ServiceType, GeneratedFile, SERVICE_TYPES } from './types';
 import { SERVICE_DEFAULTS, PRESETS } from './constants';
 import { generateAllFiles } from './generator';
+import { parseImport } from './importer';
+import LAGOON_IMAGES from './lagoon-images.json';
+
+// validate uselagoon/* images against the Docker Hub snapshot (npm run update-images)
+function imageStatus(image?: string): 'ok' | 'unknown' | null {
+  const m = (image ?? '').match(/^(?:docker\.io\/)?uselagoon\/([^:@/]+)/);
+  if (!m) return null;
+  return LAGOON_IMAGES.images.includes(m[1]) ? 'ok' : 'unknown';
+}
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -61,11 +70,13 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<string>('');
   const [copySuccess, setCopySuccess] = useState<string | null>(null);
   const [preset, setPreset] = useState<string>('Drupal');
+  const [isStale, setIsStale] = useState(false);
+  const [importText, setImportText] = useState('');
+  const [importMsg, setImportMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   const {
     register,
     control,
-    handleSubmit,
     watch,
     setValue,
     reset,
@@ -73,6 +84,7 @@ export default function App() {
   } = useForm<LagoonProjectInput, any, LagoonProject>({
     resolver: zodResolver(LagoonProjectSchema),
     defaultValues: PRESETS.Drupal,
+    mode: 'onChange',
   });
 
   const services = useWatch({ control, name: 'services' }) ?? [];
@@ -88,14 +100,34 @@ export default function App() {
 
   const loadPreset = (name: string) => {
     setPreset(name);
+    setImportMsg(null);
     reset(PRESETS[name]);
-    setGeneratedFiles([]);
   };
 
-  const onSubmit = (data: LagoonProject) => {
-    const files = generateAllFiles(data);
-    setGeneratedFiles(files);
-    setActiveTab(files[0].path);
+  // live regeneration: any form change re-renders the files on the right
+  useEffect(() => {
+    const regenerate = (values: unknown) => {
+      const parsed = LagoonProjectSchema.safeParse(values);
+      if (parsed.success) {
+        const files = generateAllFiles(parsed.data);
+        setGeneratedFiles(files);
+        setActiveTab(prev => (files.some(f => f.path === prev) ? prev : files[0].path));
+      }
+      setIsStale(!parsed.success);
+    };
+    regenerate(watch());
+    const subscription = watch(values => regenerate(values));
+    return () => subscription.unsubscribe();
+  }, [watch]);
+
+  const doImport = () => {
+    try {
+      const { kind, project, warnings } = parseImport(importText);
+      reset({ ...watch(), ...project });
+      setImportMsg({ ok: true, text: `Imported ${kind}.${warnings.length ? ' ' + warnings.join(' · ') : ''}` });
+    } catch (e: any) {
+      setImportMsg({ ok: false, text: e.message });
+    }
   };
 
   const downloadZip = async () => {
@@ -163,6 +195,10 @@ export default function App() {
         </div>
       </header>
 
+      <datalist id="uselagoon-images">
+        {LAGOON_IMAGES.images.map(name => <option key={name} value={`uselagoon/${name}:latest`} />)}
+      </datalist>
+
       <main className="max-w-7xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-12 gap-8">
         <div className="lg:col-span-5 space-y-8">
 
@@ -182,6 +218,37 @@ export default function App() {
               </button>
             ))}
           </div>
+
+          {/* Import existing config */}
+          <section className={cardCls}>
+            <details>
+              <summary className="flex items-center gap-2 cursor-pointer select-none">
+                <FileCode size={18} className="opacity-50" />
+                <h2 className="font-serif italic text-lg">Import Existing Config</h2>
+              </summary>
+              <div className="mt-4 space-y-3">
+                <p className="text-[10px] font-mono opacity-50 leading-relaxed">
+                  Paste an existing .lagoon.yml (tasks, environments, routes, backups, …) or a Lagoon
+                  docker-compose.yml (services) and the form updates to match.
+                </p>
+                <textarea
+                  value={importText}
+                  onChange={e => setImportText(e.target.value)}
+                  rows={8}
+                  placeholder={'docker-compose-yaml: docker-compose.yml\n\ntasks:\n  post-rollout:\n    - run: ...'}
+                  className={cn(inputCls, 'resize-y bg-[#f5f5f5]')}
+                />
+                <button type="button" onClick={doImport} disabled={!importText.trim()} className="w-full bg-[#141414] text-[#E4E3E0] py-2.5 rounded-xl text-xs font-bold tracking-widest uppercase hover:bg-[#333] transition-colors disabled:opacity-30">
+                  IMPORT
+                </button>
+                {importMsg && (
+                  <p className={cn('text-[10px] font-mono leading-relaxed', importMsg.ok ? 'text-emerald-600' : 'text-red-500')}>
+                    {importMsg.text}
+                  </p>
+                )}
+              </div>
+            </details>
+          </section>
 
           {/* Project Core */}
           <section className={cardCls}>
@@ -310,11 +377,22 @@ export default function App() {
                   </div>
                   <div>
                     <label className={labelCls}>Image</label>
-                    <input {...register(`services.${index}.image`)} className={inputCls} />
+                    <input list="uselagoon-images" {...register(`services.${index}.image`)} className={inputCls} />
+                    {imageStatus(services[index]?.image) === 'ok' && (
+                      <p className="text-emerald-600 text-[10px] font-mono mt-1 flex items-center gap-1"><Check size={10} /> found on Docker Hub (uselagoon)</p>
+                    )}
+                    {imageStatus(services[index]?.image) === 'unknown' && (
+                      <p className="text-red-500 text-[10px] font-mono mt-1">not found in uselagoon org (snapshot {LAGOON_IMAGES.updated})</p>
+                    )}
                   </div>
                   <details>
-                    <summary className="text-[10px] font-mono uppercase opacity-50 cursor-pointer select-none">Advanced</summary>
+                    <summary className="text-[10px] font-mono uppercase opacity-50 cursor-pointer select-none">Advanced (optional)</summary>
                     <div className="mt-3 space-y-3">
+                      <p className="text-[10px] font-mono opacity-50 leading-relaxed">
+                        Empty fields fall back to Lagoon's defaults, which work well for most
+                        projects — you usually don't need to change anything here. Increasing
+                        storage sizes or persistence can affect hosting costs.
+                      </p>
                       <div className="grid grid-cols-2 gap-3">
                         <div>
                           <label className={labelCls}>Persistent Path</label>
@@ -431,8 +509,11 @@ export default function App() {
                             </button>
                           </div>
                           <details>
-                            <summary className="text-[10px] font-mono uppercase opacity-40 cursor-pointer select-none">Route options</summary>
+                            <summary className="text-[10px] font-mono uppercase opacity-40 cursor-pointer select-none">Route options (optional)</summary>
                             <div className="mt-2 space-y-2">
+                              <p className="text-[10px] font-mono opacity-50 leading-relaxed">
+                                The defaults (TLS via Let's Encrypt, HTTP redirected to HTTPS) are right for most sites.
+                              </p>
                               <div className="flex gap-4 items-center">
                                 <label className="flex items-center gap-1 text-[10px] font-mono cursor-pointer">
                                   <input type="checkbox" {...register(`environments.${envIndex}.routes.${routeIndex}.tlsAcme`)} className="accent-[#141414]" /> TLS (Let's Encrypt)
@@ -510,15 +591,15 @@ export default function App() {
             </div>
           </section>
 
-          <form onSubmit={handleSubmit(onSubmit)}>
-            <button type="submit" className="w-full bg-[#141414] text-[#E4E3E0] py-4 rounded-xl font-bold tracking-widest uppercase hover:bg-[#333] transition-colors flex items-center justify-center gap-2 shadow-[4px_4px_0px_0px_rgba(0,0,0,0.2)]">
-              <FileCode size={20} /> GENERATE CONFIGURATION
-            </button>
-          </form>
+          <p className="text-[10px] font-mono opacity-50 leading-relaxed text-center">
+            Always review the generated files before deploying — this tool can make mistakes, and
+            some option combinations may be incompatible with your project or Lagoon cluster.
+          </p>
         </div>
 
         <div className="lg:col-span-7">
-          <div className="bg-[#141414] rounded-2xl overflow-hidden shadow-[8px_8px_0px_0px_rgba(20,20,20,0.2)] min-h-[600px] flex flex-col sticky top-28">
+          <div className="lg:sticky lg:top-28">
+          <div className="bg-[#3a3a36] rounded-2xl overflow-hidden shadow-[8px_8px_0px_0px_rgba(20,20,20,0.2)] min-h-[600px] flex flex-col">
             <div className="p-4 border-b border-white/10 flex justify-between items-center bg-white/5">
               <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
                 {generatedFiles.length > 0 ? (
@@ -531,6 +612,11 @@ export default function App() {
                   <div className="text-white/30 text-[10px] font-mono py-1.5 italic">No files generated yet...</div>
                 )}
               </div>
+              {isStale && (
+                <span className="text-amber-400/80 text-[10px] font-mono whitespace-nowrap px-3" title="The form has validation errors; showing the last valid output.">
+                  ⚠ fix form errors
+                </span>
+              )}
               {generatedFiles.length > 0 && (
                 <button onClick={downloadZip} className="flex items-center gap-2 bg-[#E4E3E0] text-[#141414] px-4 py-1.5 rounded-full text-[10px] font-bold hover:scale-105 transition-transform whitespace-nowrap">
                   <Download size={14} /> DOWNLOAD ALL (.ZIP)
@@ -553,7 +639,7 @@ export default function App() {
                   <div className="absolute inset-0 flex flex-col items-center justify-center text-white/20 p-12 text-center">
                     <FileCode size={64} className="mb-4 opacity-10" />
                     <h3 className="font-serif italic text-xl mb-2">Ready to Build</h3>
-                    <p className="text-sm max-w-xs">Pick a preset, configure services, routes, tasks, cronjobs &amp; backups on the left, then generate your Lagoon configuration files.</p>
+                    <p className="text-sm max-w-xs">Pick a preset or import an existing config — the generated files update here in real time as you edit.</p>
                   </div>
                 )}
               </AnimatePresence>
@@ -582,6 +668,7 @@ export default function App() {
                 <ExternalLink size={12} className="opacity-0 group-hover:opacity-100 transition-opacity" />
               </div>
             </a>
+          </div>
           </div>
         </div>
       </main>
