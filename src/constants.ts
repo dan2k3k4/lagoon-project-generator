@@ -18,12 +18,12 @@ const db = (image: string): ServiceTypeInfo =>
 export const SERVICE_DEFAULTS: Record<ServiceType, ServiceTypeInfo> = {
   basic: { image: 'uselagoon/commons:latest', build: true, cliBuildArg: false, routes: true, appVolume: true, buildSteps: '' },
   'basic-persistent': { image: 'uselagoon/commons:latest', build: true, cliBuildArg: false, persistent: '/app/files/', routes: true, appVolume: true, buildSteps: '' },
-  cli: { image: 'uselagoon/php-8.4-cli-drupal:latest', build: true, cliBuildArg: false, routes: false, appVolume: true, buildSteps: 'composer install --no-dev' },
-  'cli-persistent': { image: 'uselagoon/php-8.4-cli-drupal:latest', build: true, cliBuildArg: false, persistent: '/app/web/sites/default/files/', persistentName: 'nginx', routes: false, appVolume: true, buildSteps: 'composer install --no-dev' },
+  cli: { image: 'uselagoon/php-8.5-cli-drupal:latest', build: true, cliBuildArg: false, routes: false, appVolume: true, buildSteps: 'composer install --no-dev' },
+  'cli-persistent': { image: 'uselagoon/php-8.5-cli-drupal:latest', build: true, cliBuildArg: false, persistent: '/app/web/sites/default/files/', persistentName: 'nginx', routes: false, appVolume: true, buildSteps: 'composer install --no-dev' },
   elasticsearch: db('uselagoon/elasticsearch-7:latest'),
-  mariadb: db('uselagoon/mariadb-11.4:latest'),
-  'mariadb-single': db('uselagoon/mariadb-11.4:latest'),
-  'mariadb-dbaas': db('uselagoon/mariadb-11.4:latest'),
+  mariadb: db('uselagoon/mariadb-11.8:latest'),
+  'mariadb-single': db('uselagoon/mariadb-11.8:latest'),
+  'mariadb-dbaas': db('uselagoon/mariadb-11.8:latest'),
   mongodb: db('uselagoon/mongo-4:latest'),
   'mongodb-single': db('uselagoon/mongo-4:latest'),
   'mongodb-dbaas': db('uselagoon/mongo-4:latest'),
@@ -33,20 +33,20 @@ export const SERVICE_DEFAULTS: Record<ServiceType, ServiceTypeInfo> = {
   node: { image: 'uselagoon/node-24:latest', build: true, cliBuildArg: false, routes: true, appVolume: true, buildSteps: 'npm ci\nnpm run build' },
   'node-persistent': { image: 'uselagoon/node-24:latest', build: true, cliBuildArg: false, persistent: '/app/files/', routes: true, appVolume: true, buildSteps: 'npm ci\nnpm run build' },
   opensearch: db('uselagoon/opensearch-3:latest'),
-  postgres: db('uselagoon/postgres-17:latest'),
-  'postgres-single': db('uselagoon/postgres-17:latest'),
-  'postgres-dbaas': db('uselagoon/postgres-17:latest'),
-  python: { image: 'uselagoon/python-3.13:latest', build: true, cliBuildArg: false, routes: true, appVolume: true, buildSteps: 'pip install -r requirements.txt' },
-  'python-persistent': { image: 'uselagoon/python-3.13:latest', build: true, cliBuildArg: false, persistent: '/app/files/', routes: true, appVolume: true, buildSteps: 'pip install -r requirements.txt' },
+  postgres: db('uselagoon/postgres-18:latest'),
+  'postgres-single': db('uselagoon/postgres-18:latest'),
+  'postgres-dbaas': db('uselagoon/postgres-18:latest'),
+  python: { image: 'uselagoon/python-3.14:latest', build: true, cliBuildArg: false, routes: true, appVolume: true, buildSteps: 'pip install -r requirements.txt' },
+  'python-persistent': { image: 'uselagoon/python-3.14:latest', build: true, cliBuildArg: false, persistent: '/app/files/', routes: true, appVolume: true, buildSteps: 'pip install -r requirements.txt' },
   redis: db('uselagoon/redis-8:latest'),
   'redis-persistent': db('uselagoon/redis-7-persistent:latest'),
-  solr: db('uselagoon/solr-9:latest'),
-  valkey: db('uselagoon/valkey-8:latest'),
-  'valkey-persistent': db('uselagoon/valkey-8:latest'),
+  solr: db('uselagoon/solr-10:latest'),
+  valkey: db('uselagoon/valkey-9:latest'),
+  'valkey-persistent': db('uselagoon/valkey-9:latest'),
   varnish: db('uselagoon/varnish-8:latest'),
   'varnish-persistent': db('uselagoon/varnish-8:latest'),
-  worker: { image: 'uselagoon/php-8.4-cli-drupal:latest', build: true, cliBuildArg: true, routes: false, appVolume: true, buildSteps: '' },
-  'worker-persistent': { image: 'uselagoon/php-8.4-cli-drupal:latest', build: true, cliBuildArg: true, routes: false, appVolume: true, buildSteps: '' },
+  worker: { image: 'uselagoon/php-8.5-cli-drupal:latest', build: true, cliBuildArg: true, routes: false, appVolume: true, buildSteps: '' },
+  'worker-persistent': { image: 'uselagoon/php-8.5-cli-drupal:latest', build: true, cliBuildArg: true, routes: false, appVolume: true, buildSteps: '' },
   none: { image: '', build: false, cliBuildArg: false, routes: false, appVolume: false, buildSteps: '' },
 };
 
@@ -86,7 +86,7 @@ export const PRESETS: Record<string, LagoonProject> = {
     services: [
       service('cli', 'cli-persistent'),
       service('nginx', 'nginx-php-persistent', { image: 'uselagoon/nginx-drupal:latest' }),
-      service('php', 'nginx-php-persistent', { image: 'uselagoon/php-8.4-fpm:latest', lagoonName: 'nginx' }),
+      service('php', 'nginx-php-persistent', { image: 'uselagoon/php-8.5-fpm:latest', lagoonName: 'nginx' }),
       service('mariadb', 'mariadb', { image: 'uselagoon/mariadb-10.11-drupal:latest' }),
     ],
     tasks: {
@@ -112,7 +112,7 @@ export const PRESETS: Record<string, LagoonProject> = {
     services: [
       service('cli', 'cli-persistent', { persistent: '/app/storage/' }),
       service('nginx', 'nginx-php-persistent', { image: 'uselagoon/nginx:latest', persistent: '/app/storage/' }),
-      service('php', 'nginx-php-persistent', { image: 'uselagoon/php-8.4-fpm:latest', lagoonName: 'nginx', persistent: '/app/storage/' }),
+      service('php', 'nginx-php-persistent', { image: 'uselagoon/php-8.5-fpm:latest', lagoonName: 'nginx', persistent: '/app/storage/' }),
       service('mariadb', 'mariadb'),
       service('redis', 'redis'),
     ],
@@ -147,5 +147,3 @@ export const PRESETS: Record<string, LagoonProject> = {
     environments: [{ name: 'main', autogenerateRoutes: '', cronjobs: [], routes: [] }],
   },
 };
-
-export const LAGOON_EXAMPLES_ORG = 'lagoon-examples';

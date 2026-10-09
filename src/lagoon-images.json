@@ -1,5 +1,5 @@
 {
-  "updated": "2026-07-22",
+  "updated": "2026-10-09",
   "org": "uselagoon",
   "images": [
     "commons",
@@ -15,6 +15,8 @@
     "mariadb-10.6",
     "mariadb-10.6-drupal",
     "mariadb-11.4",
+    "mariadb-11.8",
+    "mariadb-12.3",
     "mariadb-drupal",
     "mongo",
     "mongo-4",
@@ -92,6 +94,7 @@
     "postgres-16-drupal",
     "postgres-17",
     "postgres-17-drupal",
+    "postgres-18",
     "postgres-ckan",
     "postgres-drupal",
     "python-2.7",
@@ -123,6 +126,7 @@
     "ruby-3.4",
     "ruby-4.0",
     "solr-10",
+    "solr-10-drupal",
     "solr-5.5",
     "solr-5.5-ckan",
     "solr-5.5-drupal",
