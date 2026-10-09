@@ -6,18 +6,121 @@ type Form = { control: Control<LagoonProjectInput, any, LagoonProject>; register
 const small = cn(inputCls, 'text-[10px]');
 const rowCls = 'p-2 border border-[#141414]/5 rounded space-y-2 bg-white';
 
-function PathRoutes({ control, register, envIndex, routeIndex, serviceNames }: Form & { envIndex: number; routeIndex: number; serviceNames: string[] }) {
-  const { fields, append, remove } = useFieldArray({ control, name: `environments.${envIndex}.routes.${routeIndex}.pathRoutes` });
+// ponytail: field-array paths are built at runtime, so they're typed loosely (`as any`)
+function PathRoutes({ control, register, name, serviceNames }: Form & { name: string; serviceNames: string[] }) {
+  const { fields, append, remove } = useFieldArray({ control, name: name as any });
   return (
     <div>
       <div className="flex justify-between items-center">
         <label className={labelCls}>Path Routes (send a path to another service)</label>
-        <SmallAdd label="ADD PATH" onClick={() => append({ toService: serviceNames[0] ?? '', path: '/' })} />
+        <SmallAdd label="ADD PATH" onClick={() => append({ toService: serviceNames[0] ?? '', path: '/' } as any)} />
       </div>
       {fields.map((field, i) => (
         <div key={field.id} className="flex gap-2 mt-1">
-          <input {...register(`environments.${envIndex}.routes.${routeIndex}.pathRoutes.${i}.path`)} placeholder="/api" className={cn(small, 'flex-1')} />
-          <ServiceSelect names={serviceNames} {...register(`environments.${envIndex}.routes.${routeIndex}.pathRoutes.${i}.toService`)} />
+          <input {...register(`${name}.${i}.path` as any)} placeholder="/api" className={cn(small, 'flex-1')} />
+          <ServiceSelect names={serviceNames} {...register(`${name}.${i}.toService` as any)} />
+          <RemoveButton onClick={() => remove(i)} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function RoutesEditor({ control, register, name, label, serviceNames }: Form & { name: string; label: string; serviceNames: string[] }) {
+  const routes = useFieldArray({ control, name: name as 'environments.0.routes' });
+  const firstService = serviceNames[0] ?? '';
+  return (
+    <div>
+      <div className="flex justify-between items-center mb-2">
+        <label className="text-[10px] font-mono uppercase opacity-50">{label}</label>
+        <SmallAdd
+          label="ADD ROUTE"
+          onClick={() => routes.append({
+            service: firstService, domain: '', tlsAcme: true, insecure: 'Redirect', hstsEnabled: false, hstsMaxAge: 31536000,
+            monitoringPath: '', annotations: '', alternativeNames: '', wildcard: false, ingressClass: '', pathRoutes: [], disableRequestVerification: false,
+          })}
+        />
+      </div>
+      <div className="space-y-2">
+        {routes.fields.map((field, r) => {
+          const route = `${name}.${r}` as 'environments.0.routes.0';
+          return (
+            <div key={field.id} className={rowCls}>
+              <div className="flex gap-2">
+                <ServiceSelect names={serviceNames} {...register(`${route}.service`)} />
+                <input {...register(`${route}.domain`)} placeholder="www.example.com" className={cn(small, 'flex-[2]')} />
+                <RemoveButton onClick={() => routes.remove(r)} />
+              </div>
+              <details>
+                <summary className="text-[10px] font-mono uppercase opacity-40 cursor-pointer select-none">Route options (optional)</summary>
+                <div className="mt-2 space-y-2">
+                  <p className={hintCls}>The defaults (TLS via Let's Encrypt, HTTP redirected to HTTPS) are right for most sites.</p>
+                  <div className="flex flex-wrap gap-4 items-center">
+                    <label className="flex items-center gap-1 text-[10px] font-mono cursor-pointer">
+                      <input type="checkbox" {...register(`${route}.tlsAcme`)} className="accent-[#141414]" /> TLS (Let's Encrypt)
+                    </label>
+                    <label className="flex items-center gap-1 text-[10px] font-mono cursor-pointer">
+                      <input type="checkbox" {...register(`${route}.hstsEnabled`)} className="accent-[#141414]" /> HSTS
+                    </label>
+                    <label className="flex items-center gap-1 text-[10px] font-mono cursor-pointer" title="*.domain — needs your own certificate (TLS off), no alternative names">
+                      <input type="checkbox" {...register(`${route}.wildcard`)} className="accent-[#141414]" /> Wildcard
+                    </label>
+                    <label className="flex items-center gap-1 text-[10px] font-mono cursor-pointer" title="Let visitors wake an idled environment without the bot check (idling.amazee.io/disable-request-verification)">
+                      <input type="checkbox" {...register(`${route}.disableRequestVerification`)} className="accent-[#141414]" /> No idle bot-check
+                    </label>
+                    <select {...register(`${route}.insecure`)} className={cn(inputCls, 'w-auto text-[10px]')}>
+                      <option value="Redirect">HTTP: Redirect</option>
+                      <option value="Allow">HTTP: Allow</option>
+                    </select>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className={labelCls}>HSTS Max Age</label>
+                      <input type="number" {...register(`${route}.hstsMaxAge`)} className={small} />
+                    </div>
+                    <div>
+                      <label className={labelCls}>Monitoring Path</label>
+                      <input {...register(`${route}.monitoringPath`)} placeholder="/health" className={small} />
+                    </div>
+                    <div>
+                      <label className={labelCls}>Alternative Names (comma separated)</label>
+                      <input {...register(`${route}.alternativeNames`)} placeholder="example.com, www.example.org" className={small} />
+                    </div>
+                    <div>
+                      <label className={labelCls}>Ingress Class</label>
+                      <input {...register(`${route}.ingressClass`)} placeholder="cluster default" className={small} />
+                    </div>
+                  </div>
+                  <div>
+                    <label className={labelCls}>Ingress Annotations (key: value, one per line)</label>
+                    <textarea {...register(`${route}.annotations`)} rows={2} placeholder={'nginx.ingress.kubernetes.io/permanent-redirect: https://www.example.com$request_uri'} className={cn(small, 'resize-none')} />
+                  </div>
+                  <PathRoutes control={control} register={register} name={`${route}.pathRoutes`} serviceNames={serviceNames} />
+                </div>
+              </details>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+export function AutogeneratePathRoutes({ control, register, name, label, serviceNames }: Form & { name: string; label: string; serviceNames: string[] }) {
+  const { fields, append, remove } = useFieldArray({ control, name: name as 'autogeneratePathRoutes' });
+  const first = serviceNames[0] ?? '';
+  return (
+    <div>
+      <div className="flex justify-between items-center">
+        <label className={labelCls}>{label}</label>
+        <SmallAdd label="ADD PATH" onClick={() => append({ fromService: first, toService: first, path: '/' })} />
+      </div>
+      {fields.map((field, i) => (
+        <div key={field.id} className="flex gap-2 mt-1 items-center">
+          <ServiceSelect names={serviceNames} {...register(`${name}.${i}.fromService` as 'autogeneratePathRoutes.0.fromService')} />
+          <input {...register(`${name}.${i}.path` as 'autogeneratePathRoutes.0.path')} placeholder="/api" className={cn(small, 'flex-1')} />
+          <span className="text-[10px] font-mono opacity-50">→</span>
+          <ServiceSelect names={serviceNames} {...register(`${name}.${i}.toService` as 'autogeneratePathRoutes.0.toService')} />
           <RemoveButton onClick={() => remove(i)} />
         </div>
       ))}
@@ -27,7 +130,6 @@ function PathRoutes({ control, register, envIndex, routeIndex, serviceNames }: F
 
 export function EnvironmentCard({ control, register, envIndex, serviceNames, onRemove }: Form & { envIndex: number; serviceNames: string[]; onRemove: () => void }) {
   const env = `environments.${envIndex}` as const;
-  const routes = useFieldArray({ control, name: `${env}.routes` });
   const cronjobs = useFieldArray({ control, name: `${env}.cronjobs` });
   const types = useFieldArray({ control, name: `${env}.types` });
   const overrides = useFieldArray({ control, name: `${env}.overrides` });
@@ -45,77 +147,15 @@ export function EnvironmentCard({ control, register, envIndex, serviceNames, onR
         <RemoveButton onClick={onRemove} size={14} />
       </div>
 
-      {/* Routes */}
-      <div>
-        <div className="flex justify-between items-center mb-2">
-          <label className="text-[10px] font-mono uppercase opacity-50">Custom Routes</label>
-          <SmallAdd
-            label="ADD ROUTE"
-            onClick={() => routes.append({
-              service: firstService, domain: '', tlsAcme: true, insecure: 'Redirect', hstsEnabled: false, hstsMaxAge: 31536000,
-              monitoringPath: '', annotations: '', alternativeNames: '', wildcard: false, ingressClass: '', pathRoutes: [],
-            })}
-          />
-        </div>
-        <div className="space-y-2">
-          {routes.fields.map((field, r) => {
-            const route = `${env}.routes.${r}` as const;
-            return (
-              <div key={field.id} className={rowCls}>
-                <div className="flex gap-2">
-                  <ServiceSelect names={serviceNames} {...register(`${route}.service`)} />
-                  <input {...register(`${route}.domain`)} placeholder="www.example.com" className={cn(small, 'flex-[2]')} />
-                  <RemoveButton onClick={() => routes.remove(r)} />
-                </div>
-                <details>
-                  <summary className="text-[10px] font-mono uppercase opacity-40 cursor-pointer select-none">Route options (optional)</summary>
-                  <div className="mt-2 space-y-2">
-                    <p className={hintCls}>The defaults (TLS via Let's Encrypt, HTTP redirected to HTTPS) are right for most sites.</p>
-                    <div className="flex flex-wrap gap-4 items-center">
-                      <label className="flex items-center gap-1 text-[10px] font-mono cursor-pointer">
-                        <input type="checkbox" {...register(`${route}.tlsAcme`)} className="accent-[#141414]" /> TLS (Let's Encrypt)
-                      </label>
-                      <label className="flex items-center gap-1 text-[10px] font-mono cursor-pointer">
-                        <input type="checkbox" {...register(`${route}.hstsEnabled`)} className="accent-[#141414]" /> HSTS
-                      </label>
-                      <label className="flex items-center gap-1 text-[10px] font-mono cursor-pointer" title="*.domain — needs your own certificate (TLS off), no alternative names">
-                        <input type="checkbox" {...register(`${route}.wildcard`)} className="accent-[#141414]" /> Wildcard
-                      </label>
-                      <select {...register(`${route}.insecure`)} className={cn(inputCls, 'w-auto text-[10px]')}>
-                        <option value="Redirect">HTTP: Redirect</option>
-                        <option value="Allow">HTTP: Allow</option>
-                      </select>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <label className={labelCls}>HSTS Max Age</label>
-                        <input type="number" {...register(`${route}.hstsMaxAge`)} className={small} />
-                      </div>
-                      <div>
-                        <label className={labelCls}>Monitoring Path</label>
-                        <input {...register(`${route}.monitoringPath`)} placeholder="/health" className={small} />
-                      </div>
-                      <div>
-                        <label className={labelCls}>Alternative Names (comma separated)</label>
-                        <input {...register(`${route}.alternativeNames`)} placeholder="example.com, www.example.org" className={small} />
-                      </div>
-                      <div>
-                        <label className={labelCls}>Ingress Class</label>
-                        <input {...register(`${route}.ingressClass`)} placeholder="cluster default" className={small} />
-                      </div>
-                    </div>
-                    <div>
-                      <label className={labelCls}>Ingress Annotations (key: value, one per line)</label>
-                      <textarea {...register(`${route}.annotations`)} rows={2} placeholder={'nginx.ingress.kubernetes.io/permanent-redirect: https://www.example.com$request_uri'} className={cn(small, 'resize-none')} />
-                    </div>
-                    <PathRoutes control={control} register={register} envIndex={envIndex} routeIndex={r} serviceNames={serviceNames} />
-                  </div>
-                </details>
-              </div>
-            );
-          })}
-        </div>
-      </div>
+      <RoutesEditor control={control} register={register} name={`${env}.routes`} label="Custom Routes" serviceNames={serviceNames} />
+
+      <AutogeneratePathRoutes
+        control={control}
+        register={register}
+        name={`${env}.autogeneratePathRoutes`}
+        label="Autogenerated path routes (replaces the global ones for this environment)"
+        serviceNames={serviceNames}
+      />
 
       {/* Cronjobs */}
       <div>

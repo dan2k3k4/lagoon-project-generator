@@ -20,17 +20,18 @@ import {
   Archive,
   KeyRound,
   HardDrive,
+  ArrowLeftRight,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import JSZip from 'jszip';
 
-import { LagoonProject, LagoonProjectInput, LagoonProjectSchema, ServiceType, GeneratedFile, SERVICE_TYPES, VOLUME_TYPES, MAX_VOLUMES, serviceRefPaths } from './types';
+import { LagoonProject, LagoonProjectInput, LagoonProjectSchema, ServiceType, GeneratedFile, SERVICE_TYPES, VOLUME_TYPES, MAX_VOLUMES, serviceRefPaths, renameVolumeMounts } from './types';
 import { SERVICE_DEFAULTS, PRESETS, environment } from './constants';
 import { generateAllFiles } from './generator';
 import { parseImport } from './importer';
 import LAGOON_IMAGES from './lagoon-images.json';
 import { cn, inputCls, labelCls, cardCls, hintCls, SectionHeader, AddButton, SmallAdd, RemoveButton, ServiceSelect } from './ui';
-import { EnvironmentCard } from './EnvironmentCard';
+import { EnvironmentCard, RoutesEditor, AutogeneratePathRoutes } from './EnvironmentCard';
 
 // validate uselagoon/* images against the Docker Hub snapshot (npm run update-images)
 function imageStatus(image?: string): 'ok' | 'unknown' | null {
@@ -82,7 +83,6 @@ export default function App() {
   const { fields: environmentFields, append: appendEnvironment, remove: removeEnvironment } = useFieldArray({ control, name: 'environments' });
   const { fields: registryFields, append: appendRegistry, remove: removeRegistry } = useFieldArray({ control, name: 'containerRegistries' });
   const { fields: volumeFields, append: appendVolume, remove: removeVolume } = useFieldArray({ control, name: 'volumes' });
-  const { fields: pathRouteFields, append: appendPathRoute, remove: removePathRoute } = useFieldArray({ control, name: 'autogeneratePathRoutes' });
 
   const loadPreset = (name: string) => {
     setPreset(name);
@@ -90,8 +90,9 @@ export default function App() {
     reset(PRESETS[name]);
   };
 
-  // last non-empty name per service index, so a rename can carry its references along
+  // last non-empty name per service / volume index, so a rename can carry its references along
   const knownNames = useRef<string[]>([]);
+  const knownVolumes = useRef<string[]>([]);
 
   // live regeneration: any form change re-renders the files on the right
   useEffect(() => {
@@ -104,7 +105,10 @@ export default function App() {
       }
       setIssues(parsed.success ? [] : parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`));
     };
-    const syncNames = () => { knownNames.current = (getValues('services') ?? []).map(s => s.name); };
+    const syncNames = () => {
+      knownNames.current = (getValues('services') ?? []).map(s => s.name);
+      knownVolumes.current = (getValues('volumes') ?? []).map(v => v.name);
+    };
     syncNames();
     regenerate(watch());
     const subscription = watch((values, { name }) => {
@@ -116,6 +120,16 @@ export default function App() {
         if (from && to && from !== to) {
           serviceRefPaths(getValues(), from).forEach(path => setValue(path as any, to));
           knownNames.current[i] = to;
+        }
+      } else if (/^volumes\.\d+\.name$/.test(name ?? '')) {
+        const i = Number(name!.split('.')[1]);
+        const [from, to] = [knownVolumes.current[i], values.volumes?.[i]?.name];
+        if (from && to && from !== to) {
+          (getValues('services') ?? []).forEach((svc, s) => {
+            const next = renameVolumeMounts(svc.volumes, from, to);
+            if (next !== (svc.volumes ?? '')) setValue(`services.${s}.volumes`, next);
+          });
+          knownVolumes.current[i] = to;
         }
       } else {
         syncNames();
@@ -308,21 +322,11 @@ export default function App() {
                   TLS (Let's Encrypt)
                 </label>
               </div>
-              <div>
-                <div className="flex justify-between items-center">
-                  <label className={labelCls}>Path Routes (path on one service's route → another service)</label>
-                  <SmallAdd label="ADD PATH" onClick={() => appendPathRoute({ fromService: serviceNames[0] ?? '', toService: serviceNames[0] ?? '', path: '/' })} />
-                </div>
-                {pathRouteFields.map((field, i) => (
-                  <div key={field.id} className="flex gap-2 mt-1 items-center">
-                    <ServiceSelect names={serviceNames} {...register(`autogeneratePathRoutes.${i}.fromService`)} />
-                    <input {...register(`autogeneratePathRoutes.${i}.path`)} placeholder="/api" className={cn(inputCls, 'flex-1 text-[10px]')} />
-                    <span className="text-[10px] font-mono opacity-50">→</span>
-                    <ServiceSelect names={serviceNames} {...register(`autogeneratePathRoutes.${i}.toService`)} />
-                    <RemoveButton onClick={() => removePathRoute(i)} />
-                  </div>
-                ))}
-              </div>
+              <label className="flex items-center gap-2 text-xs font-mono cursor-pointer" title="idling.amazee.io/disable-request-verification">
+                <input type="checkbox" {...register('autogenerateDisableRequestVerification')} className="accent-[#141414]" />
+                Skip the bot check when waking idled environments
+              </label>
+              <AutogeneratePathRoutes control={control} register={register} name="autogeneratePathRoutes" label="Path Routes (path on one service's route → another service)" serviceNames={serviceNames} />
             </div>
           </section>
 
@@ -545,6 +549,20 @@ export default function App() {
               {environmentFields.map((field, envIndex) => (
                 <EnvironmentCard key={field.id} control={control} register={register} envIndex={envIndex} serviceNames={serviceNames} onRemove={() => removeEnvironment(envIndex)} />
               ))}
+            </div>
+          </section>
+
+          {/* Production Routes (active/standby) */}
+          <section className={cardCls}>
+            <SectionHeader icon={<ArrowLeftRight size={18} />} title="Active / Standby Routes" />
+            <div className="space-y-4">
+              <p className={hintCls}>
+                Only for projects with active/standby production environments set up in Lagoon. These routes
+                (production_routes) move between the two environments on a switch — don't repeat them under an
+                environment's custom routes. Services must exist in both branches.
+              </p>
+              <RoutesEditor control={control} register={register} name="productionRoutes.active" label="Active routes" serviceNames={serviceNames} />
+              <RoutesEditor control={control} register={register} name="productionRoutes.standby" label="Standby routes" serviceNames={serviceNames} />
             </div>
           </section>
 
