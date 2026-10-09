@@ -629,6 +629,16 @@ export default function App() {
           Always review the generated files before deploying — this tool can make mistakes, and
           some option combinations may be incompatible with your project or Lagoon cluster.
         </p>
+        <p className="text-xs font-mono opacity-70 leading-relaxed text-center max-w-[96rem] mx-auto mt-1">
+          Made with ❤️ by{' '}
+          <a href="https://danlemon.com" target="_blank" rel="noopener noreferrer" className="underline hover:opacity-100">
+            Dan Lemon
+          </a>{' '}
+          (dan2k3k4) ·{' '}
+          <a href="https://github.com/dan2k3k4/lagoon-project-generator" target="_blank" rel="noopener noreferrer" className="underline hover:opacity-100">
+            Source code
+          </a>
+        </p>
       </footer>
 
       <style>{`
