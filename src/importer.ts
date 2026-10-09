@@ -21,6 +21,7 @@ function parseTask(entry: any): LagoonTask | null {
     container: str(run.container),
     shell: str(run.shell),
     when: str(run.when),
+    weight: run.weight ? str(run.weight) : '',
   };
 }
 
@@ -39,6 +40,10 @@ function parseRoutes(routes: any[], warnings: string[]): LagoonRoute[] {
           hstsMaxAge: 31536000,
           monitoringPath: '',
           annotations: '',
+          alternativeNames: '',
+          wildcard: false,
+          ingressClass: '',
+          pathRoutes: [],
         };
         if (typeof domain === 'string') {
           route.domain = domain;
@@ -60,7 +65,11 @@ function parseRoutes(routes: any[], warnings: string[]): LagoonRoute[] {
             if (opts.annotations && typeof opts.annotations === 'object') {
               route.annotations = Object.entries(opts.annotations).map(([k, v]) => `${k}: ${v}`).join('\n');
             }
-            const known = ['tls-acme', 'insecure', 'hstsEnabled', 'hstsMaxAge', 'hstsPreload', 'hstsIncludeSubdomains', 'hsts', 'monitoring-path', 'annotations'];
+            if (Array.isArray(opts.alternativenames)) route.alternativeNames = opts.alternativenames.join(', ');
+            if (bool(opts.wildcard)) route.wildcard = true;
+            route.ingressClass = str(opts.ingressClass);
+            if (Array.isArray(opts.pathRoutes)) route.pathRoutes = opts.pathRoutes.map((r: any) => ({ toService: str(r.toService), path: str(r.path) }));
+            const known = ['tls-acme', 'insecure', 'hstsEnabled', 'hstsMaxAge', 'hstsPreload', 'hstsIncludeSubdomains', 'hsts', 'monitoring-path', 'annotations', 'alternativenames', 'wildcard', 'ingressClass', 'pathRoutes'];
             Object.keys(opts).filter(k => !known.includes(k)).forEach(k => warnings.push(`route ${name}: option "${k}" not supported by this form, dropped`));
           }
         }
@@ -83,6 +92,11 @@ function parseLagoonYml(doc: any, warnings: string[]): Partial<LagoonProjectInpu
     if ('allowPullrequests' in auto) project.autogenerateAllowPullrequests = bool(auto.allowPullrequests);
     if (auto.insecure === 'Allow') project.autogenerateInsecure = 'Allow';
     if (Array.isArray(auto.prefixes)) project.autogeneratePrefixes = auto.prefixes.join(', ');
+    if ('tls-acme' in auto || 'tlsAcme' in auto) project.autogenerateTlsAcme = bool(auto['tls-acme'] ?? auto.tlsAcme);
+    if (auto.ingressClass) project.autogenerateIngressClass = str(auto.ingressClass);
+    if (Array.isArray(auto.pathRoutes)) {
+      project.autogeneratePathRoutes = auto.pathRoutes.map((r: any) => ({ fromService: str(r.fromService), toService: str(r.toService), path: str(r.path) }));
+    }
   }
 
   if (doc['backup-schedule']?.production || doc['backup-retention']?.production) {
@@ -120,8 +134,18 @@ function parseLagoonYml(doc: any, warnings: string[]): Partial<LagoonProjectInpu
       autogenerateRoutes: 'autogenerateRoutes' in (env ?? {}) ? (bool(env.autogenerateRoutes) ? 'true' as const : 'false' as const) : '' as const,
       cronjobs: (env?.cronjobs ?? []).map((c: any) => ({
         name: str(c.name), schedule: str(c.schedule), command: str(c.command), service: str(c.service),
+        inPod: c.inPod == null ? '' as const : (bool(c.inPod) ? 'true' as const : 'false' as const),
+        timeout: str(c.timeout),
       })),
       routes: parseRoutes(env?.routes, warnings),
+      types: Object.entries(env?.types ?? {}).flatMap(([service, t]) => {
+        const type = toServiceType(str(t));
+        if (!type) warnings.push(`environment ${name}: unknown type "${t}" for ${service}, dropped`);
+        return type ? [{ service, type }] : [];
+      }),
+      overrides: Object.entries<any>(env?.overrides ?? {}).map(([service, o]) => ({
+        service, image: str(o?.image), dockerfile: str(o?.build?.dockerfile),
+      })),
     }));
   }
 
@@ -142,7 +166,13 @@ function labelMap(labels: any): Record<string, string> {
   return labels && typeof labels === 'object' ? labels : {};
 }
 
-const LEGACY_TYPES: Record<string, ServiceType> = { mongo: 'mongodb', 'mongo-single': 'mongodb-single' };
+// aliases build-deploy-tool still converts
+const LEGACY_TYPES: Record<string, ServiceType> = {
+  mongo: 'mongodb', 'mongo-single': 'mongodb-single', 'mongo-shared': 'mongodb-dbaas', 'mongo-dbaas': 'mongodb-dbaas',
+  'mariadb-shared': 'mariadb-dbaas', 'postgres-shared': 'postgres-dbaas', 'python-ckandatapusher': 'python',
+};
+const toServiceType = (t: string): ServiceType | undefined =>
+  (SERVICE_TYPES as readonly string[]).includes(t) ? t as ServiceType : LEGACY_TYPES[t];
 
 function parseDockerCompose(doc: any, warnings: string[]): Partial<LagoonProjectInput> {
   const project: Partial<LagoonProjectInput> = {};
@@ -156,7 +186,7 @@ function parseDockerCompose(doc: any, warnings: string[]): Partial<LagoonProject
       warnings.push(`service "${name}" has no lagoon.type label, skipped`);
       continue;
     }
-    const type = (SERVICE_TYPES as readonly string[]).includes(rawType) ? rawType as ServiceType : LEGACY_TYPES[rawType];
+    const type = toServiceType(rawType);
     if (!type) {
       warnings.push(`service "${name}": unknown lagoon.type "${rawType}", skipped`);
       continue;
@@ -167,6 +197,19 @@ function parseDockerCompose(doc: any, warnings: string[]): Partial<LagoonProject
     const isPhpOfPair = type.startsWith('nginx-php') && !!labels['lagoon.name'];
     const fallback = isPhpOfPair ? 'uselagoon/php-8.5-fpm:latest' : defaults.image;
     const image = !svc.build && str(svc.image).includes('/') ? str(svc.image) : fallback;
+    let external: LagoonService['external'];
+    if (type === 'external') {
+      try {
+        external = JSON.parse(str(labels['lagoon.external.service']) || '{}');
+      } catch {
+        warnings.push(`service "${name}": lagoon.external.service is not valid JSON, dropped`);
+      }
+    }
+    const volumes = Object.entries(labels)
+      .map(([k, v]) => [/^lagoon\.volumes\.(.+)\.path$/.exec(k)?.[1], str(v)])
+      .filter(([vol]) => vol)
+      .map(([vol, path]) => `${vol}:${path}`)
+      .join('\n');
     services.push({
       name,
       type,
@@ -178,9 +221,19 @@ function parseDockerCompose(doc: any, warnings: string[]): Partial<LagoonProject
       autogeneratedRoute: bool(labels['lagoon.autogeneratedroute']) ? 'true' : (labels['lagoon.autogeneratedroute'] != null ? 'false' : ''),
       port: str(labels['lagoon.service.port'] ?? ''),
       buildSteps: defaults.buildSteps,
+      volumes,
+      ...(external ? { external } : {}),
     });
   }
   if (services.length > 0) project.services = services;
+
+  const volumes = Object.entries<any>(doc.volumes ?? {})
+    .filter(([, v]) => labelMap(v?.labels)['lagoon.type'] === 'persistent')
+    .map(([name, v]) => {
+      const labels = labelMap(v.labels);
+      return { name, size: str(labels['lagoon.persistent.size']), backup: str(labels['lagoon.backup']) !== 'false' };
+    });
+  if (volumes.length > 0) project.volumes = volumes;
   return project;
 }
 
