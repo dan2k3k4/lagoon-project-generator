@@ -1,5 +1,0 @@
-{
-  "name": "Lagoon Project Generator",
-  "description": "Generate .lagoon.yml, docker-compose.yml, and Dockerfiles for amazee.io Lagoon projects with smart defaults and example templates.",
-  "requestFramePermissions": []
-}
