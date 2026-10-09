@@ -4,6 +4,7 @@ import { z } from 'zod';
 export const SERVICE_TYPES = [
   'basic',
   'basic-persistent',
+  'basic-single',
   'cli',
   'cli-persistent',
   'elasticsearch',
@@ -24,6 +25,7 @@ export const SERVICE_TYPES = [
   'postgres-dbaas',
   'python',
   'python-persistent',
+  'rabbitmq',
   'redis',
   'redis-persistent',
   'solr',
@@ -33,8 +35,14 @@ export const SERVICE_TYPES = [
   'varnish-persistent',
   'worker',
   'worker-persistent',
+  'external',
   'none',
 ] as const;
+
+// Lagoon project / service names end up in Kubernetes object names (DNS-1123 labels)
+const dnsName = (what: string) => z.string()
+  .min(1, `${what} is required`)
+  .regex(/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/, `${what}: lowercase letters, digits and hyphens only`);
 
 export const ServiceTypeSchema = z.enum(SERVICE_TYPES);
 export type ServiceType = z.infer<typeof ServiceTypeSchema>;
@@ -46,6 +54,8 @@ export const LagoonTaskSchema = z.object({
   container: z.string().optional(),
   shell: z.string().optional(),
   when: z.string().optional(),
+  // tasks run in ascending weight order; '' = 0
+  weight: z.string().regex(/^-?\d*$/, 'Weight must be an integer').optional(),
 });
 export type LagoonTask = z.infer<typeof LagoonTaskSchema>;
 
@@ -54,8 +64,17 @@ export const LagoonCronjobSchema = z.object({
   schedule: z.string().min(1, 'Schedule is required'),
   command: z.string().min(1, 'Command is required'),
   service: z.string().min(1, 'Service is required'),
+  // '' = Lagoon decides (in-pod when it runs every ≤30 minutes)
+  inPod: z.enum(['', 'true', 'false']).default(''),
+  // Go duration, Lagoon default 4h, max 24h
+  timeout: z.string().regex(/^(\d+h)?(\d+m)?(\d+s)?$/, 'Timeout like 30m, 2h, 1h30m').optional(),
 });
 export type LagoonCronjob = z.infer<typeof LagoonCronjobSchema>;
+
+export const PathRouteSchema = z.object({
+  toService: z.string().min(1),
+  path: z.string().startsWith('/', 'Path must start with /'),
+});
 
 export const LagoonRouteSchema = z.object({
   service: z.string().min(1),
@@ -67,6 +86,10 @@ export const LagoonRouteSchema = z.object({
   monitoringPath: z.string().optional(),
   // one "key: value" ingress annotation per line
   annotations: z.string().optional(),
+  alternativeNames: z.string().optional(), // comma separated
+  wildcard: z.boolean().default(false),
+  ingressClass: z.string().optional(),
+  pathRoutes: z.array(PathRouteSchema).default([]),
 });
 export type LagoonRoute = z.infer<typeof LagoonRouteSchema>;
 
@@ -76,11 +99,19 @@ export const LagoonEnvironmentSchema = z.object({
   autogenerateRoutes: z.enum(['', 'true', 'false']).default(''),
   cronjobs: z.array(LagoonCronjobSchema).default([]),
   routes: z.array(LagoonRouteSchema).default([]),
+  // per-environment lagoon.type overrides
+  types: z.array(z.object({ service: z.string().min(1), type: ServiceTypeSchema })).default([]),
+  // per-environment image / dockerfile overrides
+  overrides: z.array(z.object({
+    service: z.string().min(1),
+    image: z.string().optional(),
+    dockerfile: z.string().optional(),
+  })).default([]),
 });
 export type LagoonEnvironment = z.infer<typeof LagoonEnvironmentSchema>;
 
 export const LagoonServiceSchema = z.object({
-  name: z.string().min(1, 'Service name is required'),
+  name: dnsName('Service name'),
   type: ServiceTypeSchema,
   image: z.string().optional(),
   // lagoon.persistent / .name / .size labels
@@ -95,6 +126,15 @@ export const LagoonServiceSchema = z.object({
   port: z.string().optional(),
   // one shell command per line, run in the generated Dockerfile
   buildSteps: z.string().optional(),
+  // additional volumes: one "volume:/path" per line (lagoon.volumes.<volume>.path)
+  volumes: z.string().optional(),
+  // lagoon.external.service, only for type external
+  external: z.object({
+    name: z.string().optional(),
+    project: z.string().optional(),
+    environment: z.string().optional(),
+    domain: z.string().optional(),
+  }).optional(),
 });
 export type LagoonService = z.infer<typeof LagoonServiceSchema>;
 
@@ -105,8 +145,15 @@ export const ContainerRegistrySchema = z.object({
 });
 export type ContainerRegistry = z.infer<typeof ContainerRegistrySchema>;
 
+export const VolumeSchema = z.object({
+  name: dnsName('Volume name'),
+  size: z.string().regex(/^(\d+(Mi|Gi|Ti))?$/, 'Size like 5Gi').optional(), // '' = 5Gi
+  backup: z.boolean().default(true),
+});
+export type LagoonVolume = z.infer<typeof VolumeSchema>;
+
 export const LagoonProjectSchema = z.object({
-  projectName: z.string().min(1, 'Project name is required'),
+  projectName: dnsName('Project name'),
   // environment_variables.git_sha
   gitSha: z.boolean().default(false),
   // routes.autogenerate
@@ -114,6 +161,9 @@ export const LagoonProjectSchema = z.object({
   autogenerateInsecure: z.enum(['Redirect', 'Allow']).default('Redirect'),
   autogeneratePrefixes: z.string().optional(), // comma separated
   autogenerateAllowPullrequests: z.boolean().default(true),
+  autogenerateTlsAcme: z.boolean().default(true),
+  autogenerateIngressClass: z.string().optional(),
+  autogeneratePathRoutes: z.array(PathRouteSchema.extend({ fromService: z.string().min(1) })).default([]),
   // backup-schedule / backup-retention (production)
   backupsEnabled: z.boolean().default(false),
   backupSchedule: z.string().default('M H(22-2) * * *'),
@@ -125,12 +175,14 @@ export const LagoonProjectSchema = z.object({
   }).default({ hourly: 0, daily: 7, weekly: 6, monthly: 0 }),
   containerRegistries: z.array(ContainerRegistrySchema).default([]),
   services: z.array(LagoonServiceSchema).min(1, 'At least one service is required'),
+  // top-level docker-compose volumes with lagoon.type: persistent
+  volumes: z.array(VolumeSchema).default([]),
   tasks: z.object({
     preRollout: z.array(LagoonTaskSchema).default([]),
     postRollout: z.array(LagoonTaskSchema).default([]),
   }).default({ preRollout: [], postRollout: [] }),
   environments: z.array(LagoonEnvironmentSchema).default([]),
-});
+}).superRefine(crossCheck);
 export type LagoonProject = z.infer<typeof LagoonProjectSchema>;
 // form values before zod applies defaults/coercion
 export type LagoonProjectInput = z.input<typeof LagoonProjectSchema>;
@@ -145,4 +197,78 @@ export interface LagoonExample {
   name: string;
   description: string;
   html_url: string;
+}
+
+// types that may mount additional volumes (build-deploy-tool AllowAdditionalVolumes)
+export const VOLUME_TYPES: readonly ServiceType[] = [
+  'basic', 'basic-persistent', 'cli', 'cli-persistent', 'nginx', 'nginx-php', 'nginx-php-persistent',
+  'node', 'node-persistent', 'python', 'python-persistent', 'worker', 'worker-persistent',
+];
+export const MAX_VOLUMES = 6;
+
+export const volumeMounts = (s?: string) => (s ?? '').split('\n').map(l => l.trim()).filter(Boolean).map(l => {
+  const idx = l.indexOf(':');
+  return { volume: l.slice(0, idx).trim(), path: l.slice(idx + 1).trim() };
+});
+
+// rules that span fields: unique names, references to existing services/volumes, Lagoon build errors
+function crossCheck(p: any, ctx: z.RefinementCtx) {
+  const issue = (path: (string | number)[], message: string) => ctx.addIssue({ code: 'custom', path, message });
+  const dupes = (items: { name: string }[], path: string, what: string) => {
+    const seen = new Set<string>();
+    items.forEach((it, i) => {
+      if (seen.has(it.name)) issue([path, i, 'name'], `Duplicate ${what} "${it.name}"`);
+      seen.add(it.name);
+    });
+  };
+  dupes(p.services, 'services', 'service');
+  dupes(p.environments, 'environments', 'environment');
+  dupes(p.volumes, 'volumes', 'volume');
+
+  const services = new Set<string>(p.services.map((s: any) => s.name));
+  const ref = (path: (string | number)[], name: string) => {
+    if (name && !services.has(name)) issue(path, `Unknown service "${name}"`);
+  };
+  (['preRollout', 'postRollout'] as const).forEach(kind =>
+    p.tasks[kind].forEach((t: any, i: number) => ref(['tasks', kind, i, 'service'], t.service)));
+  p.autogeneratePathRoutes.forEach((r: any, i: number) => {
+    ref(['autogeneratePathRoutes', i, 'fromService'], r.fromService);
+    ref(['autogeneratePathRoutes', i, 'toService'], r.toService);
+  });
+  p.environments.forEach((env: any, e: number) => {
+    env.cronjobs.forEach((c: any, i: number) => ref(['environments', e, 'cronjobs', i, 'service'], c.service));
+    env.types.forEach((t: any, i: number) => ref(['environments', e, 'types', i, 'service'], t.service));
+    env.overrides.forEach((o: any, i: number) => ref(['environments', e, 'overrides', i, 'service'], o.service));
+    env.routes.forEach((r: any, i: number) => {
+      const path = ['environments', e, 'routes', i];
+      ref([...path, 'service'], r.service);
+      r.pathRoutes.forEach((pr: any, j: number) => ref([...path, 'pathRoutes', j, 'toService'], pr.toService));
+      // build-deploy-tool rejects these combinations
+      if (r.wildcard && r.tlsAcme) issue([...path, 'wildcard'], 'Wildcard routes need TLS (Let\'s Encrypt) off');
+      if (r.wildcard && (r.alternativeNames ?? '').trim()) issue([...path, 'wildcard'], 'Wildcard routes can\'t have alternative names');
+    });
+  });
+
+  if (p.volumes.length > MAX_VOLUMES) issue(['volumes'], `Lagoon allows at most ${MAX_VOLUMES} additional volumes`);
+  const volumes = new Set<string>(p.volumes.map((v: any) => v.name));
+  p.services.forEach((s: any, i: number) => {
+    const mounts = volumeMounts(s.volumes);
+    if (mounts.length > 0 && !VOLUME_TYPES.includes(s.type)) issue(['services', i, 'volumes'], `${s.type} services can't mount additional volumes`);
+    mounts.forEach(m => {
+      if (!volumes.has(m.volume)) issue(['services', i, 'volumes'], `Unknown volume "${m.volume}"`);
+      if (!m.path.startsWith('/')) issue(['services', i, 'volumes'], `Mount "${m.volume}" needs an absolute path (volume:/path)`);
+    });
+    if (s.type === 'external' && !s.external?.name && !s.external?.domain) issue(['services', i, 'external'], 'External services need a service name or a domain');
+  });
+}
+
+// form paths whose value names the given service — rewritten when a service is renamed
+const SERVICE_REF_KEYS = new Set(['service', 'fromService', 'toService', 'lagoonName', 'persistentName']);
+export function serviceRefPaths(values: unknown, serviceName: string, path = ''): string[] {
+  if (!values || typeof values !== 'object') return [];
+  return Object.entries(values).flatMap(([k, v]) => {
+    const p = path ? `${path}.${k}` : k;
+    if (SERVICE_REF_KEYS.has(k) && v === serviceName) return [p];
+    return serviceRefPaths(v, serviceName, p);
+  });
 }
