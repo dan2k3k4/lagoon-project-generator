@@ -61,7 +61,7 @@ assert.equal(compose.services.mariadb.labels['lagoon.type'], 'mariadb');
 assert.equal(compose.networks['amazeeio-network'].external, true);
 
 // dockerfiles: cli builds from base image, nginx multi-stages from CLI_IMAGE
-assert.match(byPath['lagoon/cli.dockerfile'], /FROM uselagoon\/php-8\.4-cli-drupal:latest/);
+assert.match(byPath['lagoon/cli.dockerfile'], /FROM uselagoon\/php-8\.5-cli-drupal:latest/);
 assert.match(byPath['lagoon/cli.dockerfile'], /RUN composer install --no-dev/);
 assert.match(byPath['lagoon/nginx.dockerfile'], /ARG CLI_IMAGE/);
 assert.match(byPath['lagoon/nginx.dockerfile'], /COPY --from=cli \/app \/app/);
@@ -88,7 +88,7 @@ assert.deepEqual(composeImport.project.services, drupal.services);
 const minimal = LagoonProjectSchema.parse(PRESETS.Static);
 const staticYml = YAML.parse(generateLagoonYml(minimal));
 assert.equal(staticYml.tasks, undefined);
-assert.equal(staticYml.routes, undefined);
+assert.deepEqual(staticYml.routes, { autogenerate: { insecure: 'Redirect' } }); // Lagoon's own default is Allow
 assert.equal(staticYml['backup-schedule'], undefined);
 
 console.log('generator self-check passed ✔');

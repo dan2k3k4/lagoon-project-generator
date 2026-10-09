@@ -3,20 +3,23 @@
 // (hub.docker.com has no CORS headers, so the browser can't query it live.)
 
 // runtime images only — skip lagoon-core/infra repos (api, keycloak, broker, ...)
-const RUNTIME_IMAGE = /^(php|node|python|ruby|mariadb|mysql|postgres|redis|valkey|solr|opensearch|elasticsearch|varnish|mongo|nginx|commons|rabbitmq)([.-]|$)/;
+const FAMILIES = ['php', 'node', 'python', 'ruby', 'mariadb', 'mysql', 'postgres', 'redis', 'valkey', 'solr', 'opensearch', 'elasticsearch', 'varnish', 'mongo', 'nginx', 'commons', 'rabbitmq'];
+const RUNTIME_IMAGE = new RegExp(`^(${FAMILIES.join('|')})([.-]|$)`);
 
 async function main() {
-  const names: string[] = [];
-  let url: string | null = 'https://hub.docker.com/v2/repositories/uselagoon/?page_size=100';
-  while (url) {
+  // anonymous requests can't page past the first 100 results, so query each family
+  // separately (name= is a substring match; RUNTIME_IMAGE drops the strays)
+  const names = new Set<string>();
+  for (const family of FAMILIES) {
+    const url = `https://hub.docker.com/v2/repositories/uselagoon/?page_size=100&name=${family}`;
     const res = await fetch(url);
     if (!res.ok) throw new Error(`Docker Hub API ${res.status} for ${url}`);
     const data: any = await res.json();
-    names.push(...data.results.map((r: any) => r.name));
-    url = data.next;
+    if (data.next) throw new Error(`more than 100 "${family}" repos; split the family`);
+    data.results.forEach((r: any) => names.add(r.name));
   }
 
-  const images = names.filter(n => RUNTIME_IMAGE.test(n)).sort();
+  const images = [...names].filter(n => RUNTIME_IMAGE.test(n)).sort();
   const out = {
     updated: new Date().toISOString().slice(0, 10),
     org: 'uselagoon',
@@ -24,7 +27,7 @@ async function main() {
   };
   const { writeFileSync } = await import('node:fs');
   writeFileSync(new URL('../src/lagoon-images.json', import.meta.url), JSON.stringify(out, null, 2) + '\n');
-  console.log(`wrote ${images.length} images (of ${names.length} repos) to src/lagoon-images.json`);
+  console.log(`wrote ${images.length} images (of ${names.size} repos) to src/lagoon-images.json`);
 }
 
 main();

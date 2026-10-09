@@ -165,7 +165,7 @@ function parseDockerCompose(doc: any, warnings: string[]): Partial<LagoonProject
     // with a build config, the compose image is just a local tag — use the type's base image;
     // for nginx-php pairs, lagoon.name marks the php container grouped into the nginx pod
     const isPhpOfPair = type.startsWith('nginx-php') && !!labels['lagoon.name'];
-    const fallback = isPhpOfPair ? 'uselagoon/php-8.4-fpm:latest' : defaults.image;
+    const fallback = isPhpOfPair ? 'uselagoon/php-8.5-fpm:latest' : defaults.image;
     const image = !svc.build && str(svc.image).includes('/') ? str(svc.image) : fallback;
     services.push({
       name,
